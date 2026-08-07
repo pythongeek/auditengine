@@ -1,0 +1,53 @@
+# AuditEngine — Cursor Rules
+# Cursor reads this file automatically. Do not delete or move.
+
+## PROJECT
+AuditEngine: multi-agent codebase audit platform.
+Stack: TypeScript + Cloudflare Workers + Durable Objects + D1 + R2 + Browser Run.
+10 specialist AI agents run in parallel, analyze code, write findings to D1,
+stream results to a WebSocket dashboard. This is infrastructure code — correctness over speed.
+
+## MANDATORY FIRST ACTIONS EVERY SESSION
+1. Read BUILD_STATE.md first. Know what is done and what is not.
+2. Read src/types/index.ts before writing any typed code.
+3. Read the file you are editing fully before making changes.
+
+## ABSOLUTE RULES
+
+TYPES: Never modify src/types/index.ts unless the task explicitly says to.
+Changing a type breaks every file importing it. Ask before touching it.
+
+CLOUDFLARE APIs: Only use these. No others without verification.
+D1: db.prepare().bind().run() | .first() | .all() | db.batch()
+R2: r2.put(key, value) | r2.get(key) | r2.list({ prefix })
+DO: env.BINDING.idFromName(str) | env.BINDING.get(id) | stub.fetch(request)
+DO WebSocket: ctx.acceptWebSocket(req) | ctx.getWebSockets() | webSocketMessage() | webSocketClose()
+Unknown API → write: // TODO: VERIFY CLOUDFLARE API — DO NOT GUESS
+
+MODELS: Valid names only: kimi-k3 | kimi-k2.6 | minimax-m3
+No claude-* | gpt-* | gemini-* anywhere in the codebase.
+
+LLM CALLS: All model calls go through src/lib/llm-gateway.ts llmCall() only.
+No fetch() to any model endpoint from any other file.
+
+SCOPE: Do not touch files not listed in the current task.
+Want to change an out-of-scope file? Ask first.
+
+SCHEMA: Never rename D1 columns. src/db/schema.sql is the source of truth.
+
+BANNED PHRASES (never write in code, comments, or output):
+production ready | looks good | should work | seems correct | appears to |
+likely works | no issues found | clean code | well structured | everything looks
+
+## UNCERTAINTY PROTOCOL
+Say one of these instead of guessing:
+- SPEC CONFLICT DETECTED: [describe]
+- SCOPE QUESTION: [describe]  
+- VERIFY CLOUDFLARE API: [describe]
+- TYPE QUESTION: [describe]
+
+## SESSION END
+1. Run npx tsc --noEmit — fix all errors
+2. Update BUILD_STATE.md accurately (✅ / ⚠️ / ⏳)
+3. Add row to SESSION LOG in BUILD_STATE.md
+4. Report: "SESSION COMPLETE. Files changed: [list]. Type check: passing."

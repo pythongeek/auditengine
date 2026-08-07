@@ -1,0 +1,28 @@
+name = "auditengine"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "auditengine-d1"
+database_id = "PASTE_D1_ID_HERE"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "auditengine-r2"
+
+[durable_objects]
+bindings = [
+  { name = "AGENT_DO", class_name = "AgentDurableObject" },
+  { name = "COORDINATOR_DO", class_name = "CoordinatorDurableObject" },
+  { name = "DASHBOARD_DO", class_name = "DashboardDurableObject" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["AgentDurableObject", "CoordinatorDurableObject", "DashboardDurableObject"]
+
+[vars]
+STAGING_URL = "https://PASTE_STAGING_URL_HERE"
+ADMIN_EMAIL = "admin@example.com"

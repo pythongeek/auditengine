@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+*.log
+
+# Cloudflare / local secrets
+.env
+.dev.vars
+.wrangler/
+
+# Source delivery bundle (extracted files live at project root)
+files (2).zip
+files (2)/
