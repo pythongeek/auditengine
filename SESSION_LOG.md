@@ -10,3 +10,4 @@
 | S07 | 2026-08-08 | Ingestion worker | src/workers/ingestion.ts | 4fa3ca3 |
 | S08 | 2026-08-08 | Coordinator DO | src/workers/coordinator.ts, src/agents/base-agent.ts | 8af8d50 |
 | S09 | 2026-08-08 | Priority resolver | src/workers/priority-resolver.ts, src/workers/coordinator.ts | b065c1e |
+| S10 | 2026-08-08 | Verification agent | src/workers/verification.ts, src/workers/coordinator.ts | [pending] |

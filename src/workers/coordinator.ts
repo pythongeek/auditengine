@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { Env, AgentType, AuditPhase, DashboardEvent } from '../types/index'
 import { runPriorityResolver } from './priority-resolver'
+import { verifyTask, recalcProductionScore } from './verification'
 
 export class CoordinatorDurableObject extends DurableObject<Env> {
   private auditRunId: string = ''
@@ -244,13 +245,16 @@ async function allAgentsDoneInPhase(auditRunId: string, phase: number, db: D1Dat
 
 // STUBS — implemented in later sessions
 async function spawnVerificationAgent(taskId: string, env: Env): Promise<void> {
-  // no-op stub
+  const task = await env.DB
+    .prepare('SELECT * FROM tasks WHERE task_id = ?')
+    .bind(taskId)
+    .first<{ task_id: string; audit_run_id: string; finding_ids: string; commit_sha: string | null; status: string }>()
+
+  if (!task || !task.commit_sha) return
+
+  await verifyTask(task as unknown as import('../types/index').Task, env)
 }
 
 async function spawnVisualQA(auditRunId: string, env: Env): Promise<void> {
-  // no-op stub
-}
-
-async function recalcProductionScore(auditRunId: string, db: D1Database): Promise<void> {
   // no-op stub
 }
