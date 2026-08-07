@@ -24,8 +24,8 @@ Tool: Kimi Code
 | SESSION_LOG.md | ✅ | S00 |
 | src/types/index.ts | ✅ | S01 |
 | src/db/schema.sql | ✅ | S01 — PRAGMA journal_mode=WAL commented out because local D1 execution returns SQLITE_AUTH; restore when applying to remote D1 |
-| src/lib/llm-gateway.ts | ⏳ | S02 |
-| src/lib/model-router.ts | ⏳ | S02 |
+| src/lib/llm-gateway.ts | ✅ | S02 — added taskType to RouteDecision to make budget override exceptions implementable |
+| src/lib/model-router.ts | ✅ | S02 |
 | src/lib/gate.ts | ⏳ | S03 |
 | src/constitutions/universal.md | ⏳ | S04 |
 | src/constitutions/security.md | ⏳ | S04 |
