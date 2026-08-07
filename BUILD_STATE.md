@@ -27,17 +27,17 @@ Tool: Kimi Code
 | src/lib/llm-gateway.ts | ✅ | S02 — added taskType to RouteDecision to make budget override exceptions implementable |
 | src/lib/model-router.ts | ✅ | S02 |
 | src/lib/gate.ts | ✅ | S03 |
-| src/constitutions/universal.md | ⏳ | S04 |
-| src/constitutions/security.md | ⏳ | S04 |
-| src/constitutions/api.md | ⏳ | S04 |
-| src/constitutions/frontend.md | ⏳ | S04 |
-| src/constitutions/database.md | ⏳ | S04 |
-| src/constitutions/architecture.md | ⏳ | S04 |
-| src/constitutions/testing.md | ⏳ | S04 |
-| src/constitutions/performance.md | ⏳ | S04 |
-| src/constitutions/devops.md | ⏳ | S04 |
-| src/constitutions/documentation.md | ⏳ | S04 |
-| src/constitutions/visual-qa.md | ⏳ | S04 |
+| src/constitutions/universal.md | ✅ | S04 |
+| src/constitutions/security.md | ✅ | S04 |
+| src/constitutions/api.md | ✅ | S04 |
+| src/constitutions/frontend.md | ✅ | S04 |
+| src/constitutions/database.md | ✅ | S04 |
+| src/constitutions/architecture.md | ✅ | S04 |
+| src/constitutions/testing.md | ✅ | S04 |
+| src/constitutions/performance.md | ✅ | S04 |
+| src/constitutions/devops.md | ✅ | S04 |
+| src/constitutions/documentation.md | ✅ | S04 |
+| src/constitutions/visual-qa.md | ✅ | S04 |
 
 ## PHASE B — AGENT CORE
 
@@ -116,3 +116,4 @@ Errors: 0
 | S01 | 2026-08-08 | Types + D1 schema | src/types/index.ts, src/db/schema.sql | 6df09e6 |
 | S02 | 2026-08-08 | LLM gateway + model router | src/lib/llm-gateway.ts, src/lib/model-router.ts | 78800d1 |
 | S03 | 2026-08-08 | Verification gate | src/lib/gate.ts | 4b6f027 |
+| S04 | 2026-08-08 | Constitution files (11 agents) | src/constitutions/*.md | [pending] |
