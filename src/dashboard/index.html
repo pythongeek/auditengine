@@ -20,6 +20,7 @@
       --yellow: #eab308;
       --orange: #f97316;
       --red: #ef4444;
+      --accent: #3b82f6;
     }
     * { box-sizing: border-box; }
     body {
@@ -29,14 +30,17 @@
       color: var(--text);
       line-height: 1.4;
     }
-    header {
+    nav {
       padding: 1rem 1.5rem;
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
-    h1 { margin: 0; font-size: 1.25rem; }
+    nav .brand { font-weight: 700; font-size: 1.2rem; }
+    nav a { color: var(--text); text-decoration: none; margin-left: 1rem; }
+    nav a:hover { color: var(--accent); }
+    #auditMeta { color: var(--muted); font-size: 0.85rem; }
     #connection { font-size: 0.85rem; color: var(--muted); }
     #connection.connected { color: var(--green); }
     main {
@@ -182,8 +186,17 @@
   </style>
 </head>
 <body>
-  <header>
-    <h1>AuditEngine Dashboard</h1>
+  <nav>
+    <div class="brand">AuditEngine</div>
+    <div>
+      <a href="/">Home</a>
+      <a href="/audit/new">New Audit</a>
+      <a href="/dashboard">Dashboard</a>
+    </div>
+  </nav>
+
+  <header style="padding: 0.75rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+    <div id="auditMeta">Audit: —</div>
     <div id="connection">Disconnected</div>
   </header>
 
@@ -243,6 +256,9 @@
       agents[type] = { state: 'idle', files: 0, findings: 0 };
     });
 
+    const params = new URLSearchParams(location.search);
+    const auditRunId = params.get('audit_run_id') || 'default';
+
     const els = {
       agents: document.getElementById('agents'),
       findings: document.getElementById('findings'),
@@ -251,10 +267,13 @@
       tokenTable: document.querySelector('#tokenTable tbody'),
       salvations: document.getElementById('salvations'),
       connection: document.getElementById('connection'),
+      auditMeta: document.getElementById('auditMeta'),
       overlay: document.getElementById('budgetOverlay'),
       overlaySpent: document.getElementById('overlaySpent'),
       overlayBudget: document.getElementById('overlayBudget'),
     };
+
+    els.auditMeta.textContent = 'Audit: ' + auditRunId;
 
     function renderAgents() {
       els.agents.innerHTML = AGENT_TYPES.map(type => {
@@ -392,7 +411,9 @@
 
     let ws;
     function connect() {
-      const url = location.href.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
+      const url = new URL('/dashboard/ws', location.origin);
+      url.searchParams.set('audit_run_id', auditRunId);
+      url.protocol = url.protocol.replace('http', 'ws');
       ws = new WebSocket(url);
       ws.onopen = () => {
         els.connection.textContent = 'Connected';

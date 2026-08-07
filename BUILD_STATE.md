@@ -1,6 +1,6 @@
 # AuditEngine BUILD_STATE
 Last updated: 2026-08-08
-Session number: 15
+Session number: 16
 Tool: Kimi Code
 
 ## STATUS KEY
@@ -67,7 +67,12 @@ Tool: Kimi Code
 | File | Status | Notes |
 |------|--------|-------|
 | src/dashboard/dashboard-do.ts | ✅ | S13 — WebSocket DO with acceptWebSocket / broadcast / handlers |
-| src/dashboard/index.html | ✅ | S13 — plain HTML/JS dashboard, 5 panels, 12 event types |
+| src/dashboard/index.html | ✅ | S13 — live dashboard with nav, audit_run_id query param |
+| src/dashboard/home.html | ✅ | S16 — landing page with navigation |
+| src/dashboard/audit-new.html | ✅ | S16 — audit start form with file upload/paste |
+| src/dashboard/dashboard-html.ts | ✅ | Generated module for DASHBOARD_HTML |
+| src/dashboard/home-html.ts | ✅ | Generated module for HOME_HTML |
+| src/dashboard/audit-new-html.ts | ✅ | Generated module for AUDIT_NEW_HTML |
 
 ## INTEGRATION + DEPLOY
 
@@ -129,3 +134,4 @@ Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type 
 | S13 | 2026-08-08 | Dashboard DO + frontend | src/dashboard/dashboard-do.ts, src/dashboard/index.html | dcadfd3 |
 | S14 | 2026-08-08 | Entry point + Cloudflare deploy | src/index.ts, src/workers/ingestion.ts, src/dashboard/dashboard-html.ts, wrangler.toml | 5ed890e |
 | S15 | 2026-08-08 | Gate + router tests | test/helpers.ts, test/gate.test.ts, test/model-router.test.ts | ee09da4 |
+| S16 | 2026-08-08 | UI navigation + audit start form | src/dashboard/home.html, src/dashboard/audit-new.html, src/dashboard/index.html, src/index.ts, src/dashboard/*-html.ts | [pending] |

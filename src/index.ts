@@ -4,8 +4,16 @@ import { CoordinatorDurableObject } from './workers/coordinator'
 import { DashboardDurableObject } from './dashboard/dashboard-do'
 import ingestionWorker from './workers/ingestion'
 import { DASHBOARD_HTML } from './dashboard/dashboard-html'
+import { HOME_HTML } from './dashboard/home-html'
+import { AUDIT_NEW_HTML } from './dashboard/audit-new-html'
 
 export { AgentDurableObject, CoordinatorDurableObject, DashboardDurableObject }
+
+function htmlResponse(html: string): Response {
+  return new Response(html, {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  })
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -16,11 +24,19 @@ export default {
       return ingestionWorker.fetch(request, env)
     }
 
+    // Route: GET / → home page
+    if (url.pathname === '/' && request.method === 'GET') {
+      return htmlResponse(HOME_HTML)
+    }
+
+    // Route: GET /audit/new → audit start form
+    if (url.pathname === '/audit/new' && request.method === 'GET') {
+      return htmlResponse(AUDIT_NEW_HTML)
+    }
+
     // Route: /dashboard → serve dashboard HTML
-    if (url.pathname === '/dashboard') {
-      return new Response(DASHBOARD_HTML, {
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      })
+    if (url.pathname === '/dashboard' && request.method === 'GET') {
+      return htmlResponse(DASHBOARD_HTML)
     }
 
     // Route: /dashboard/ws → WebSocket upgrade to Dashboard DO

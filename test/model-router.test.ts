@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { routeToModel, applyBudgetOverride } from '../src/lib/model-router'
-import type { RouteDecision, TaskType } from '../src/types/index'
+import { routeToModel, applyBudgetOverride, type RouteDecision } from '../src/lib/model-router'
+import type { TaskType } from '../src/types/index'
 
 describe('model-router', () => {
   it('routes deep_audit to kimi-k3', () => {
