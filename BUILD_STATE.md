@@ -45,7 +45,7 @@ Tool: Kimi Code
 |------|--------|-------|
 | src/agents/base-agent.ts — tick() state machine | ✅ | S05 — added broadcast parameter to tick so llmCall can emit token_usage events; logMissingFile uses empty audit_run_id because the helper lacks that context
 | src/agents/base-agent.ts — message builders | ✅ | S06 |
-| src/workers/ingestion.ts | ⏳ | S07 |
+| src/workers/ingestion.ts | ✅ | S07 |
 
 ## PHASE C — ORCHESTRATION
 
@@ -119,3 +119,4 @@ Errors: 0
 | S04 | 2026-08-08 | Constitution files (11 agents) | src/constitutions/*.md | c6f4be5 |
 | S05 | 2026-08-08 | Agent base state machine | src/agents/base-agent.ts | d36c448 |
 | S06 | 2026-08-08 | Agent message builders | src/agents/base-agent.ts | 12d051a |
+| S07 | 2026-08-08 | Ingestion worker | src/workers/ingestion.ts | [pending] |
