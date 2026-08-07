@@ -3,6 +3,7 @@ import type { Env, AgentPersistentState, AgentType, GateContext,
   DashboardEvent, Message } from '../types/index'
 import { llmCall } from '../lib/llm-gateway'
 import { runGate } from '../lib/gate'
+import { runSalvationProtocol } from '../workers/salvation'
 
 export const DOMAIN_MAP: Record<AgentType, string> = {
   security:      "backend",
@@ -407,11 +408,6 @@ File: ${state.currentFile}
 Provide a full execution trace: DOM → handler → API → middleware → DB → response → UI.
 If any layer is missing or bypassed, explain exactly what is missing and how it breaks the chain.
 `
-}
-
-// STUB — implemented in S11
-async function runSalvationProtocol(state: AgentPersistentState, env: Env): Promise<void> {
-  // no-op stub
 }
 
 export class AgentDurableObject extends DurableObject<Env> {
