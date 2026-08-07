@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import type { Env, AgentType, AuditPhase, DashboardEvent } from '../types/index'
 import { runPriorityResolver } from './priority-resolver'
 import { verifyTask, recalcProductionScore } from './verification'
+import { runVisualQA } from './visual-qa'
 
 export class CoordinatorDurableObject extends DurableObject<Env> {
   private auditRunId: string = ''
@@ -256,5 +257,5 @@ async function spawnVerificationAgent(taskId: string, env: Env): Promise<void> {
 }
 
 async function spawnVisualQA(auditRunId: string, env: Env): Promise<void> {
-  // no-op stub
+  await runVisualQA(auditRunId, env)
 }

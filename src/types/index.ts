@@ -247,6 +247,7 @@ export interface Env {
   AGENT_DO:        DurableObjectNamespace
   COORDINATOR_DO:  DurableObjectNamespace
   DASHBOARD_DO:    DurableObjectNamespace
+  BROWSER:         Fetcher
   KIMI_API_KEY:    string
   MINIMAX_API_KEY: string
   GITHUB_TOKEN:    string

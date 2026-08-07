@@ -9,6 +9,9 @@
     "test": "vitest run",
     "type-check": "tsc --noEmit"
   },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^0.0.14"
+  },
   "devDependencies": {
     "wrangler": "^3.0.0",
     "@cloudflare/workers-types": "^4.0.0",

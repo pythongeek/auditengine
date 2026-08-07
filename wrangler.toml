@@ -26,3 +26,6 @@ new_classes = ["AgentDurableObject", "CoordinatorDurableObject", "DashboardDurab
 [vars]
 STAGING_URL = "https://PASTE_STAGING_URL_HERE"
 ADMIN_EMAIL = "admin@example.com"
+
+[browser]
+binding = "BROWSER"
