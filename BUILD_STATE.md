@@ -1,6 +1,6 @@
 # AuditEngine BUILD_STATE
 Last updated: 2026-08-08
-Session number: 12
+Session number: 13
 Tool: Kimi Code
 
 ## STATUS KEY
@@ -66,8 +66,8 @@ Tool: Kimi Code
 
 | File | Status | Notes |
 |------|--------|-------|
-| src/dashboard/dashboard-do.ts | ⏳ | S13 |
-| src/dashboard/index.html | ⏳ | S13 |
+| src/dashboard/dashboard-do.ts | ✅ | S13 — WebSocket DO with acceptWebSocket / broadcast / handlers |
+| src/dashboard/index.html | ✅ | S13 — plain HTML/JS dashboard, 5 panels, 12 event types |
 
 ## INTEGRATION + DEPLOY
 
@@ -126,3 +126,4 @@ Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type 
 | S10 | 2026-08-08 | Verification agent | src/workers/verification.ts, src/workers/coordinator.ts | 07d2af8 |
 | S11 | 2026-08-08 | Salvation protocol | src/workers/salvation.ts, src/agents/base-agent.ts | 3957acf |
 | S12 | 2026-08-08 | Visual QA agent | src/workers/visual-qa.ts, src/workers/coordinator.ts, tsconfig.json | 83dc30d |
+| S13 | 2026-08-08 | Dashboard DO + frontend | src/dashboard/dashboard-do.ts, src/dashboard/index.html | [pending] |
