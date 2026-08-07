@@ -22,8 +22,8 @@ Tool: Kimi Code
 | src/index.ts (stub) | ✅ | S00 |
 | SYSTEM_SPEC.md (template) | ✅ | S00 — human fills per audit target |
 | SESSION_LOG.md | ✅ | S00 |
-| src/types/index.ts | ⏳ | S01 |
-| src/db/schema.sql | ⏳ | S01 |
+| src/types/index.ts | ✅ | S01 |
+| src/db/schema.sql | ✅ | S01 — PRAGMA journal_mode=WAL commented out because local D1 execution returns SQLITE_AUTH; restore when applying to remote D1 |
 | src/lib/llm-gateway.ts | ⏳ | S02 |
 | src/lib/model-router.ts | ⏳ | S02 |
 | src/lib/gate.ts | ⏳ | S03 |
@@ -113,3 +113,4 @@ Errors: 0
 | Session | Date | What was done | Files changed | Commit |
 |---------|------|---------------|---------------|--------|
 | S00 | 2026-08-08 | Project scaffold | wrangler.toml, package.json, tsconfig.json, src/index.ts, SYSTEM_SPEC.md, SESSION_LOG.md, scripts/setup-secrets.sh | 126e8ea |
+| S01 | 2026-08-08 | Types + D1 schema | src/types/index.ts, src/db/schema.sql | [pending] |
