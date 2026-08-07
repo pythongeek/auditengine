@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { Env, AgentType, AuditPhase, DashboardEvent } from '../types/index'
+import { runPriorityResolver } from './priority-resolver'
 
 export class CoordinatorDurableObject extends DurableObject<Env> {
   private auditRunId: string = ''
@@ -242,10 +243,6 @@ async function allAgentsDoneInPhase(auditRunId: string, phase: number, db: D1Dat
 }
 
 // STUBS — implemented in later sessions
-async function runPriorityResolver(auditRunId: string, env: Env): Promise<void> {
-  // no-op stub
-}
-
 async function spawnVerificationAgent(taskId: string, env: Env): Promise<void> {
   // no-op stub
 }
