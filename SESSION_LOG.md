@@ -5,3 +5,4 @@
 | S02 | 2026-08-08 | LLM gateway + model router | src/lib/llm-gateway.ts, src/lib/model-router.ts | 78800d1 |
 | S03 | 2026-08-08 | Verification gate | src/lib/gate.ts | 4b6f027 |
 | S04 | 2026-08-08 | Constitution files (11 agents) | src/constitutions/*.md | c6f4be5 |
+| S05 | 2026-08-08 | Agent base state machine | src/agents/base-agent.ts | [pending] |
