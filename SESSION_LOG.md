@@ -8,4 +8,4 @@
 | S05 | 2026-08-08 | Agent base state machine | src/agents/base-agent.ts | d36c448 |
 | S06 | 2026-08-08 | Agent message builders | src/agents/base-agent.ts | 12d051a |
 | S07 | 2026-08-08 | Ingestion worker | src/workers/ingestion.ts | 4fa3ca3 |
-| S08 | 2026-08-08 | Coordinator DO | src/workers/coordinator.ts, src/agents/base-agent.ts | [pending] |
+| S08 | 2026-08-08 | Coordinator DO | src/workers/coordinator.ts, src/agents/base-agent.ts | 8af8d50 |
