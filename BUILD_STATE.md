@@ -134,4 +134,4 @@ Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type 
 | S13 | 2026-08-08 | Dashboard DO + frontend | src/dashboard/dashboard-do.ts, src/dashboard/index.html | dcadfd3 |
 | S14 | 2026-08-08 | Entry point + Cloudflare deploy | src/index.ts, src/workers/ingestion.ts, src/dashboard/dashboard-html.ts, wrangler.toml | 5ed890e |
 | S15 | 2026-08-08 | Gate + router tests | test/helpers.ts, test/gate.test.ts, test/model-router.test.ts | ee09da4 |
-| S16 | 2026-08-08 | UI navigation + audit start form | src/dashboard/home.html, src/dashboard/audit-new.html, src/dashboard/index.html, src/index.ts, src/dashboard/*-html.ts | [pending] |
+| S16 | 2026-08-08 | UI navigation + audit start form | src/dashboard/home.html, src/dashboard/audit-new.html, src/dashboard/index.html, src/index.ts, src/dashboard/*-html.ts | 56d930c |
