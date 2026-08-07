@@ -127,5 +127,5 @@ Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type 
 | S11 | 2026-08-08 | Salvation protocol | src/workers/salvation.ts, src/agents/base-agent.ts | 3957acf |
 | S12 | 2026-08-08 | Visual QA agent | src/workers/visual-qa.ts, src/workers/coordinator.ts, tsconfig.json | 83dc30d |
 | S13 | 2026-08-08 | Dashboard DO + frontend | src/dashboard/dashboard-do.ts, src/dashboard/index.html | dcadfd3 |
-| S14 | 2026-08-08 | Entry point + Cloudflare deploy | src/index.ts, src/workers/ingestion.ts, src/dashboard/dashboard-html.ts, wrangler.toml | [pending] |
+| S14 | 2026-08-08 | Entry point + Cloudflare deploy | src/index.ts, src/workers/ingestion.ts, src/dashboard/dashboard-html.ts, wrangler.toml | 5ed890e |
 | S15 | 2026-08-08 | Gate + router tests | test/helpers.ts, test/gate.test.ts, test/model-router.test.ts | ee09da4 |
