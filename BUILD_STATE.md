@@ -51,7 +51,7 @@ Tool: Kimi Code
 
 | File | Status | Notes |
 |------|--------|-------|
-| src/workers/coordinator.ts | ⏳ | S08 |
+| src/workers/coordinator.ts | ✅ | S08 — also added AgentDurableObject class to src/agents/base-agent.ts so S14 entry-point import resolves |
 | src/workers/priority-resolver.ts | ⏳ | S09 |
 | src/workers/verification.ts | ⏳ | S10 |
 | src/workers/salvation.ts | ⏳ | S11 |
@@ -119,4 +119,5 @@ Errors: 0
 | S04 | 2026-08-08 | Constitution files (11 agents) | src/constitutions/*.md | c6f4be5 |
 | S05 | 2026-08-08 | Agent base state machine | src/agents/base-agent.ts | d36c448 |
 | S06 | 2026-08-08 | Agent message builders | src/agents/base-agent.ts | 12d051a |
-| S07 | 2026-08-08 | Ingestion worker | src/workers/ingestion.ts | [pending] |
+| S07 | 2026-08-08 | Ingestion worker | src/workers/ingestion.ts | 4fa3ca3 |
+| S08 | 2026-08-08 | Coordinator DO | src/workers/coordinator.ts, src/agents/base-agent.ts | [pending] |

@@ -1,3 +1,4 @@
+import { DurableObject } from 'cloudflare:workers'
 import type { Env, AgentPersistentState, AgentType, GateContext,
   DashboardEvent, Message } from '../types/index'
 import { llmCall } from '../lib/llm-gateway'
@@ -411,4 +412,55 @@ If any layer is missing or bypassed, explain exactly what is missing and how it 
 // STUB — implemented in S11
 async function runSalvationProtocol(state: AgentPersistentState, env: Env): Promise<void> {
   // no-op stub
+}
+
+export class AgentDurableObject extends DurableObject<Env> {
+  async fetch(request: Request): Promise<Response> {
+    const body = await request.json() as {
+      agentId: string
+      agentType: AgentType
+      auditRunId: string
+    }
+    const { agentId, agentType, auditRunId } = body
+
+    let state: AgentPersistentState = {
+      agentId,
+      agentType,
+      auditRunId,
+      state: 'boot',
+      fileQueue: [],
+      queueCursor: 0,
+      currentFile: null,
+      currentFileContent: null,
+      gateFailCount: 0,
+      currentFindingId: null,
+      constitutionText: '',
+      specText: '',
+      lastModelOutput: null,
+      gateRejectionReason: null,
+      gateRejectionHistory: [],
+      crossAgentContext: [],
+      validatedFindings: [],
+    }
+
+    const broadcast = (event: DashboardEvent): void => {
+      const id = this.env.DASHBOARD_DO.idFromName('dashboard-' + auditRunId)
+      const stub = this.env.DASHBOARD_DO.get(id)
+      stub.fetch(new Request('https://dashboard/broadcast', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'Content-Type': 'application/json' },
+      })).catch(() => {
+        // broadcast failures are non-fatal
+      })
+    }
+
+    while (state.state !== 'done' && state.state !== 'paused') {
+      state = await tick(state, this.env, broadcast)
+    }
+
+    return new Response(JSON.stringify({ status: state.state, agentId }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
 }
