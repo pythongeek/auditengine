@@ -74,14 +74,14 @@ Tool: Kimi Code
 | Item | Status | Notes |
 |------|--------|-------|
 | src/index.ts (final entry point) | ✅ | S14 — wires /ingest, /dashboard, /dashboard/ws, /audit/start |
-| D1 database created in Cloudflare | ⏳ | D1 ID: [paste here after creation] |
-| R2 bucket created in Cloudflare | ⏳ | Bucket: auditengine-r2 |
-| Schema applied to D1 | ⏳ | |
-| KIMI_API_KEY secret set | ⏳ | |
-| MINIMAX_API_KEY secret set | ⏳ | |
-| GITHUB_TOKEN secret set | ⏳ | |
-| ADMIN_PASSWORD secret set | ⏳ | |
-| wrangler deploy successful | ⏳ | Deploy URL: [paste here] |
+| D1 database created in Cloudflare | ✅ | D1 ID: b7446147-03da-4dc8-9587-f28b8df6e452 |
+| R2 bucket created in Cloudflare | ✅ | Bucket: auditengine-r2 |
+| Schema applied to D1 | ✅ | Remote schema applied |
+| KIMI_API_KEY secret set | ⏳ | Set via `wrangler secret put KIMI_API_KEY` |
+| MINIMAX_API_KEY secret set | ⏳ | Set via `wrangler secret put MINIMAX_API_KEY` |
+| GITHUB_TOKEN secret set | ⏳ | Set via `wrangler secret put GITHUB_TOKEN` |
+| ADMIN_PASSWORD secret set | ⏳ | Set via `wrangler secret put ADMIN_PASSWORD` |
+| wrangler deploy successful | ✅ | Deploy URL: https://auditengine.tsnion.workers.dev |
 
 ## TESTS
 
@@ -127,5 +127,5 @@ Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type 
 | S11 | 2026-08-08 | Salvation protocol | src/workers/salvation.ts, src/agents/base-agent.ts | 3957acf |
 | S12 | 2026-08-08 | Visual QA agent | src/workers/visual-qa.ts, src/workers/coordinator.ts, tsconfig.json | 83dc30d |
 | S13 | 2026-08-08 | Dashboard DO + frontend | src/dashboard/dashboard-do.ts, src/dashboard/index.html | dcadfd3 |
-| S14 | 2026-08-08 | Entry point wiring (local) | src/index.ts, src/workers/ingestion.ts, src/dashboard/dashboard-html.ts | 2fe9205 |
+| S14 | 2026-08-08 | Entry point + Cloudflare deploy | src/index.ts, src/workers/ingestion.ts, src/dashboard/dashboard-html.ts, wrangler.toml | [pending] |
 | S15 | 2026-08-08 | Gate + router tests | test/helpers.ts, test/gate.test.ts, test/model-router.test.ts | ee09da4 |

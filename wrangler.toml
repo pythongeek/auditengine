@@ -2,11 +2,12 @@ name = "auditengine"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "b7521ad05fd1dfb93ec2d068138c8e6c"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "auditengine-d1"
-database_id = "PASTE_D1_ID_HERE"
+database_id = "b7446147-03da-4dc8-9587-f28b8df6e452"
 
 [[r2_buckets]]
 binding = "R2"
@@ -21,7 +22,7 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["AgentDurableObject", "CoordinatorDurableObject", "DashboardDurableObject"]
+new_sqlite_classes = ["AgentDurableObject", "CoordinatorDurableObject", "DashboardDurableObject"]
 
 [vars]
 STAGING_URL = "https://PASTE_STAGING_URL_HERE"
