@@ -26,7 +26,7 @@ Tool: Kimi Code
 | src/db/schema.sql | ✅ | S01 — PRAGMA journal_mode=WAL commented out because local D1 execution returns SQLITE_AUTH; restore when applying to remote D1 |
 | src/lib/llm-gateway.ts | ✅ | S02 — added taskType to RouteDecision to make budget override exceptions implementable |
 | src/lib/model-router.ts | ✅ | S02 |
-| src/lib/gate.ts | ⏳ | S03 |
+| src/lib/gate.ts | ✅ | S03 |
 | src/constitutions/universal.md | ⏳ | S04 |
 | src/constitutions/security.md | ⏳ | S04 |
 | src/constitutions/api.md | ⏳ | S04 |
@@ -115,3 +115,4 @@ Errors: 0
 | S00 | 2026-08-08 | Project scaffold | wrangler.toml, package.json, tsconfig.json, src/index.ts, SYSTEM_SPEC.md, SESSION_LOG.md, scripts/setup-secrets.sh | 126e8ea |
 | S01 | 2026-08-08 | Types + D1 schema | src/types/index.ts, src/db/schema.sql | 6df09e6 |
 | S02 | 2026-08-08 | LLM gateway + model router | src/lib/llm-gateway.ts, src/lib/model-router.ts | 78800d1 |
+| S03 | 2026-08-08 | Verification gate | src/lib/gate.ts | [pending] |
