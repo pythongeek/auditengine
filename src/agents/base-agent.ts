@@ -302,9 +302,110 @@ export function buildGateContext(state: AgentPersistentState): GateContext {
   }
 }
 
-// STUB — implemented in S06
+const BANNED_PHRASES_LIST = [
+  "production ready", "looks good", "should work", "seems correct", "appears to",
+  "likely works", "no issues found", "clean code", "well structured", "everything looks"
+]
+
+const TRACE_CATEGORIES = new Set([
+  'auth_bypass', 'injection', 'xss', 'missing_event_handler', 'broken_api_contract'
+])
+
 export function buildAnalysisMessages(state: AgentPersistentState): Message[] {
-  return []
+  const messages: Message[] = []
+
+  // Slot 0
+  messages.push({ role: 'system', content: state.constitutionText })
+
+  // Slot 1
+  messages.push({ role: 'system', content: "## PROJECT SPECIFICATION\n" + state.specText })
+
+  // Slot 2 — only if cross-agent context exists
+  if (state.crossAgentContext.length > 0) {
+    messages.push({ role: 'user', content: buildCrossAgentBlock(state.crossAgentContext) })
+  }
+
+  // Slot 3 — only if previous output was rejected
+  if (state.gateRejectionReason !== null) {
+    messages.push({
+      role: 'user',
+      content:
+        "## GATE REJECTION — YOUR PREVIOUS OUTPUT WAS REJECTED\n" +
+        `Reason: ${state.gateRejectionReason}\n` +
+        "You must resubmit your analysis without the rejected content.\n" +
+        "Do NOT use banned phrases. Do NOT omit evidence_quote.\n" +
+        "Every finding must follow the exact JSON schema below."
+    })
+  }
+
+  // Slot 4
+  messages.push({ role: 'user', content: buildFileAnalysisBlock(state) })
+
+  return messages
+}
+
+export function buildFileAnalysisBlock(state: AgentPersistentState): string {
+  const header = `## FILE UNDER ANALYSIS\nPath: ${state.currentFile}\nAudit run: ${state.auditRunId}\nYour agent type: ${state.agentType}`
+  const fileBlock = "```\n" + (state.currentFileContent ?? '') + "\n```"
+
+  const taskInstructions = `
+## TASK
+Analyze the file above for issues matching your mandate and categories.
+Use only the evidence that appears in the file.
+Output ONLY a JSON array of findings. No prose. No markdown outside the JSON.
+If there are no issues, output [].
+`
+
+  const outputSchema = `
+## REQUIRED OUTPUT FORMAT
+Each finding must be an object with exactly these 9 fields:
+- "finding_id": a unique string ID for this finding
+- "severity": one of "critical", "high", "medium", "low", "info"
+- "category": one of the category strings from your constitution
+- "file": the file path shown above
+- "line_range": either [startLine, endLine] or null
+- "evidence_quote": an exact substring from the file content (minimum 8 characters)
+- "description": what the issue is and why it matters
+- "impact": the concrete negative consequence; required for critical and high severity (minimum 20 characters)
+- "verified_by": an array of strings describing verification steps taken
+`
+
+  const traceBlock = `
+## EXECUTION TRACE REQUIREMENT
+For findings in these categories, you must include a full execution trace in the description:
+auth_bypass, injection, xss, missing_event_handler, broken_api_contract.
+The trace must cover: DOM → handler → API → middleware → DB → response → UI.
+If the handler is missing, state that explicitly and show what should have been called.
+`
+
+  const bannedBlock = `
+## BANNED PHRASES
+Never use any of these phrases in your output:
+${BANNED_PHRASES_LIST.map(p => `- ${p}`).join('\n')}
+`
+
+  return [header, fileBlock, taskInstructions, outputSchema, traceBlock, bannedBlock].join('\n')
+}
+
+export function buildCrossAgentBlock(findings: AgentPersistentState['crossAgentContext']): string {
+  if (findings.length === 0) return ''
+
+  const lines = findings.map(f => `[${f.severity}] ${f.category} — ${f.file}\n  ${f.description}`)
+  return "## FINDINGS FROM OTHER AGENTS (read before analyzing)\n" +
+    lines.join('\n\n') +
+    "\nEND OF CROSS-AGENT CONTEXT"
+}
+
+export function buildTracePrompt(category: string, state: AgentPersistentState): string {
+  if (!TRACE_CATEGORIES.has(category)) return ''
+
+  return `
+## EXECUTION TRACE REQUIRED
+Category: ${category}
+File: ${state.currentFile}
+Provide a full execution trace: DOM → handler → API → middleware → DB → response → UI.
+If any layer is missing or bypassed, explain exactly what is missing and how it breaks the chain.
+`
 }
 
 // STUB — implemented in S11
