@@ -1,5 +1,3 @@
-import type { D1Database, R2Bucket } from '@cloudflare/workers-types'
-
 interface ManifestEntry {
   filePath:   string
   domain:     string

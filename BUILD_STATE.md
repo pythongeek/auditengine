@@ -1,6 +1,6 @@
 # AuditEngine BUILD_STATE
 Last updated: 2026-08-08
-Session number: 13
+Session number: 14
 Tool: Kimi Code
 
 ## STATUS KEY
@@ -73,7 +73,7 @@ Tool: Kimi Code
 
 | Item | Status | Notes |
 |------|--------|-------|
-| src/index.ts (final entry point) | ⏳ | S14 |
+| src/index.ts (final entry point) | ✅ | S14 — wires /ingest, /dashboard, /dashboard/ws, /audit/start |
 | D1 database created in Cloudflare | ⏳ | D1 ID: [paste here after creation] |
 | R2 bucket created in Cloudflare | ⏳ | Bucket: auditengine-r2 |
 | Schema applied to D1 | ⏳ | |
@@ -127,3 +127,4 @@ Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type 
 | S11 | 2026-08-08 | Salvation protocol | src/workers/salvation.ts, src/agents/base-agent.ts | 3957acf |
 | S12 | 2026-08-08 | Visual QA agent | src/workers/visual-qa.ts, src/workers/coordinator.ts, tsconfig.json | 83dc30d |
 | S13 | 2026-08-08 | Dashboard DO + frontend | src/dashboard/dashboard-do.ts, src/dashboard/index.html | dcadfd3 |
+| S14 | 2026-08-08 | Entry point wiring (local) | src/index.ts, src/workers/ingestion.ts, src/dashboard/dashboard-html.ts | [pending] |
