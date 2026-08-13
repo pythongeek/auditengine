@@ -1,0 +1,378 @@
+R  E  Q  U  E  S  T     F  O  R     C  O  M  M  E  N  T  S     -     T  E  C  H  N  I  C  A  L     S  P  E  C  I  F  I  C  A  T  I  O  N
+Multi-Agent AI
+Engineering Audit
+Platform
+RFC / Technical Specification
+Phase 2 of 5: Technical Design
+Document Version: 1.0
+Date: 2026-08-03
+Classification: Internal - Engineering
+CONFIDENTIAL                                        Anti-Hallucination AI Audit Platform
+Table of Contents
+RFC Metadata
+Field
+Value
+RFC Number
+RFC-2026-AHA-001
+Title
+Anti-Hallucination Multi-Agent AI Engineering Audit Platform
+Status
+Draft
+Author
+Engineering Architecture Team
+Date
+2026-08-04
+Reviewers
+CTO, VP Engineering, Lead Security Engineer
+Target Platform
+Cloudflare Edge (Workers, D1, R2, Durable Objects, Workflows)
+1. Abstract
+This RFC specifies the technical architecture for an Anti-Hallucination Multi-Agent AI Engineering Audit Platform built entirely on Cloudflare edge infrastructure. The platform employs a Coordinator Agent and 15 specialist sub-agents orchestrated through a ReAct (Reason, Act, Observe) loop to perform continuous, evidence-based code audits. Every finding produced by any agent must include a verbatim evidence quote from the analyzed source file, enforced by a multi-layered anti-hallucination system comprising Constitutional Rules, Verification Gates, and Behavioral Tuning. The platform stores audit findings in Cloudflare D1 (SQLite), repository file chunks in R2, and coordinates agents via Durable Objects with typed RPC. Continuous audit lifecycle management is handled by Cloudflare Workflows, ensuring that audits run, re-run on file changes, and track resolution until a quantified Production Readiness Score reaches the target threshold. The Salvation Protocol provides a structured escalation path when agents encounter problems they cannot solve, involving three retry attempts, a dedicated Research Phase with web search, and a final Salvation Report with cited external URLs. A Visual QA Agent leverages Cloudflare Browser Run to perform headless Chromium testing of deployed or staged environments, catching issues that static analysis alone cannot detect.
+2. Motivation and Background
+Software engineering teams currently rely on two categories of tools for code quality assurance, neither of which is sufficient for modern full-stack applications deployed on cloud-native infrastructure. Deterministic static analysis tools such as ESLint, SonarQube, Bandit, and Hadolint excel at catching syntactic errors, known vulnerability patterns, and style violations, but they fundamentally cannot reason about semantic correctness, architectural coherence, or business logic flaws. They produce high volumes of low-signal noise while entirely missing critical issues such as a missing authentication check on a newly added API endpoint, a race condition in a concurrent data pipeline, or a database query that silently fails to return results for an edge-case input combination. Human code review, while capable of semantic reasoning, does not scale to the velocity of modern development teams and is subject to fatigue, inconsistency, and the reviewer's individual expertise gaps.
+Large language models offer a third path: semantic code analysis that can reason about intent, context, and cross-file dependencies. However, LLMs are prone to hallucination, fabricating code paths that do not exist, inventing function signatures that were never defined, and generating findings that sound plausible but have no basis in the actual codebase. The fundamental challenge this platform addresses is how to harness the semantic reasoning power of LLMs while completely eliminating hallucination through architectural constraints rather than prompt engineering alone. The platform achieves this through three enforcement layers operating at different granularity levels, combined with a continuous lifecycle that treats each audit as a living process rather than a one-time scan. The choice of Cloudflare edge infrastructure is driven by the need for low-latency global access, sub-second cold starts via Durable Objects, and a unified platform that provides compute (Workers), storage (D1, R2), orchestration (Workflows, Queues), and browser automation (Browser Run) without vendor fragmentation.
+3. Technical Design Overview
+The platform follows a layered architecture with four principal tiers. The Ingestion Tier handles repository intake, chunking files into segments of no more than 500 lines, storing them in R2, and writing file metadata to D1. The Agent Tier consists of a single Coordinator Agent (implemented as a Durable Object) and 15 specialist sub-agents (each a Durable Object sub-agent with its own SQLite storage and typed RPC interface). The Enforcement Tier implements the Three Enforcement Layers: Constitutional Rules defined in a CONSTITUTION.md file injected into every agent's system prompt, Verification Gates that perform deterministic JSON schema validation on every agent output before it is accepted, and Behavioral Tuning parameters that control per-agent temperature, top-p, and evidence citation requirements. The Orchestration Tier uses Cloudflare Workflows for long-running processes such as the continuous audit lifecycle, the Deterministic Priority Resolver (a Workflow, not an LLM call), and the Salvation Protocol escalation sequence.
+The Coordinator Agent never performs analysis itself. Its sole responsibilities are reading the repository manifest, deciding which specialist agents to spawn based on detected file domains, writing an Agent Registry to D1, emitting spawn commands via typed RPC, tracking agent status transitions, and triggering cross-phase workflows. Each specialist agent operates independently in parallel, claiming files from a shared D1 claims table to prevent duplicate analysis. The claims table uses a composite unique constraint on (agent_id, file_path, audit_run_id) to guarantee atomicity. When an agent encounters a finding it cannot resolve after three attempts, the Salvation Protocol fires automatically, triggering a Research Phase where the agent performs targeted web searches via an external search API, then produces a Salvation Report containing every approach tried, external sources consulted with full URLs, and a recommended next step for the human developer.
+4. Detailed Specifications
+4.1 D1 Table Definitions
+The following eight D1 tables form the persistent data layer for the platform. All tables include a tenant_id leading column for multi-tenant isolation, created_at/updated_at timestamps for audit trail, and appropriate indexes for query performance. The D1 database uses Cloudflare's serverless SQLite with a 10GB per-database limit and supports read replication for dashboard queries.
+-- tenants: multi-tenant isolation root
+CREATE TABLE tenants (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  plan TEXT NOT NULL DEFAULT 'free',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- audit_sessions: top-level audit run tracking
+CREATE TABLE audit_sessions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  repo_url TEXT NOT NULL,
+  repo_branch TEXT DEFAULT 'main',
+  status TEXT NOT NULL DEFAULT 'pending',
+  total_files INTEGER NOT NULL DEFAULT 0,
+  files_analyzed INTEGER NOT NULL DEFAULT 0,
+  findings_count INTEGER NOT NULL DEFAULT 0,
+  readiness_score REAL DEFAULT 0.0,
+  started_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- files: per-file metadata and domain tagging
+CREATE TABLE files (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  audit_session_id TEXT NOT NULL REFERENCES audit_sessions(id),
+  path TEXT NOT NULL,
+  language TEXT,
+  domain_tag TEXT,
+  line_count INTEGER NOT NULL DEFAULT 0,
+  chunk_count INTEGER NOT NULL DEFAULT 1,
+  r2_key TEXT NOT NULL,
+  last_analyzed_at TEXT,
+  content_hash TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(tenant_id, audit_session_id, path)
+);
+-- claims: agent file claiming to prevent duplicate analysis
+CREATE TABLE claims (
+  agent_id TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  audit_run_id TEXT NOT NULL REFERENCES audit_sessions(id),
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  claimed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  status TEXT NOT NULL DEFAULT 'claimed',
+  PRIMARY KEY (agent_id, file_path, audit_run_id, tenant_id)
+);
+-- findings: structured audit findings with evidence
+CREATE TABLE findings (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  audit_session_id TEXT NOT NULL REFERENCES audit_sessions(id),
+  agent_id TEXT NOT NULL,
+  severity TEXT NOT NULL CHECK(severity IN ('critical','high','medium','low','info')),
+  category TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  line_range TEXT,
+  evidence_quote TEXT NOT NULL,
+  description TEXT NOT NULL,
+  impact TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  priority_score REAL,
+  is_regression BOOLEAN NOT NULL DEFAULT 0,
+  recurrence_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
+-- salvation_reports: Salvation Protocol output
+CREATE TABLE salvation_reports (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  finding_id TEXT NOT NULL REFERENCES findings(id),
+  audit_session_id TEXT NOT NULL REFERENCES audit_sessions(id),
+  agent_id TEXT NOT NULL,
+  attempts JSON NOT NULL,
+  research_findings JSON,
+  external_sources JSON,
+  recommended_action TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- agent_config: per-tenant per-agent behavioral tuning
+CREATE TABLE agent_config (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  agent_id TEXT NOT NULL,
+  model_provider TEXT NOT NULL DEFAULT 'kimi',
+  model_name TEXT NOT NULL,
+  temperature REAL NOT NULL DEFAULT 0.1,
+  top_p REAL NOT NULL DEFAULT 0.85,
+  max_tokens INTEGER NOT NULL DEFAULT 4096,
+  evidence_required BOOLEAN NOT NULL DEFAULT 1,
+  max_retries INTEGER NOT NULL DEFAULT 3,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(tenant_id, agent_id)
+);
+-- audit_logs: comprehensive audit trail
+CREATE TABLE audit_logs (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  audit_session_id TEXT NOT NULL REFERENCES audit_sessions(id),
+  agent_id TEXT,
+  event_type TEXT NOT NULL,
+  event_data JSON,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+4.2 JSON Schemas
+All agent outputs are validated against deterministic JSON schemas before being accepted into the database. The Verification Gate rejects any output that does not conform, forcing the agent to retry with stricter prompting. The following schemas define the core data contracts enforced at the system boundary.
+FindingResult Schema
+{"$schema": "http://json-schema.org/draft-07/schema#", "title": "FindingResult", "type": "object", "required": ["finding_id", "agent_id", "severity", "category", "file_path", "evidence_quote", "description", "impact"], "properties": {"finding_id": {"type": "string", "format": "uuid"}, "agent_id": {"type": "string"}, "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]}, "category": {"type": "string", "enum": ["security", "correctness", "performance", "maintainability", "missing", "regression"]}, "file_path": {"type": "string", "minLength": 1}, "line_range": {"type": "string"}, "evidence_quote": {"type": "string", "minLength": 10, "description": "Verbatim quote from source file. Must not be fabricated."}, "description": {"type": "string", "minLength": 20}, "impact": {"type": "string", "minLength": 20}, "suggested_fix": {"type": "string"}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}}
+SalvationReport Schema
+{"$schema": "http://json-schema.org/draft-07/schema#", "title": "SalvationReport", "type": "object", "required": ["report_id", "finding_id", "agent_id", "attempts", "external_sources", "recommended_action"], "properties": {"report_id": {"type": "string", "format": "uuid"}, "finding_id": {"type": "string", "format": "uuid"}, "agent_id": {"type": "string"}, "attempts": {"type": "array", "items": {"type": "object", "required": ["attempt_number", "approach", "result"], "properties": {"attempt_number": {"type": "integer"}, "approach": {"type": "string"}, "result": {"type": "string", "enum": ["failed", "partial", "success"]}}}}, "external_sources": {"type": "array", "items": {"type": "object", "required": ["url", "title", "relevance"], "properties": {"url": {"type": "string", "format": "uri"}, "title": {"type": "string"}, "relevance": {"type": "string"}}}}, "recommended_action": {"type": "string", "minLength": 20}}}
+AgentConfig Schema
+{"$schema": "http://json-schema.org/draft-07/schema#", "title": "AgentConfig", "type": "object", "required": ["agent_id", "model_provider", "model_name", "temperature", "top_p", "max_tokens"], "properties": {"agent_id": {"type": "string"}, "model_provider": {"type": "string", "enum": ["kimi", "anthropic", "openai", "google", "local"]}, "model_name": {"type": "string"}, "temperature": {"type": "number", "minimum": 0, "maximum": 2}, "top_p": {"type": "number", "minimum": 0, "maximum": 1}, "max_tokens": {"type": "integer", "minimum": 256, "maximum": 16384}, "evidence_required": {"type": "boolean", "default": true}, "max_retries": {"type": "integer", "minimum": 1, "maximum": 5}, "constitutional_rules": {"type": "array", "items": {"type": "string"}}}}
+4.3 Agent Prompt Templates
+Each agent receives a structured system prompt containing the constitutional rules, role-specific instructions, available tools, and the required output JSON schema. The following templates show the core prompt structure for the Coordinator Agent and two representative specialist agents. All prompts are stored as versioned strings in the agent_config table and can be updated per-tenant without deployment.
+Coordinator Agent System Prompt
+SYSTEM PROMPT: You are the Coordinator Agent for an anti-hallucination code audit platform. You NEVER analyze code yourself. Your responsibilities are: (1) Read the repository manifest from D1. (2) Determine which specialist agents to spawn based on detected file domains. (3) Write an Agent Registry entry to D1 for each agent. (4) Emit typed RPC spawn commands to each sub-agent. (5) Track agent status transitions: idle, running, blocked, done. (6) Trigger the Priority Resolver Workflow when all agents report done. (7) Monitor for Salvation Protocol escalations. CONSTITUTIONAL RULES: You must not fabricate agent capabilities. You must not invent file paths. You must not assume analysis results. Every decision must reference data from D1 or R2. TOOLS: queryD1(sql, params), spawnAgent(agentId, domain), getStatus(agentId), triggerWorkflow(workflowId, payload). OUTPUT: Structured JSON matching the CoordinatorDecision schema.
+Security Agent System Prompt
+SYSTEM PROMPT: You are the Security Agent specializing in vulnerability detection, authentication analysis, authorization checks, input validation, secrets detection, and dependency vulnerability assessment. CONSTITUTIONAL RULES: (1) Every finding MUST include an evidence_quote that is a VERBATIM excerpt from the analyzed file. (2) You must NEVER claim a vulnerability exists without quoting the exact code. (3) If you cannot determine whether code is vulnerable, you MUST label it as 'needs-investigation' with severity 'info'. (4) Hardcoded secrets must be flagged even if they appear in test files. (5) You must redact actual secret values in evidence quotes, replacing them with [REDACTED-HASH:sha256hash]. TOOLS: readFile(path), queryD1(sql, params), claimFile(path), writeFinding(finding), searchWeb(query). OUTPUT: Array of FindingResult objects matching the JSON schema.
+Performance Agent System Prompt
+SYSTEM PROMPT: You are the Performance Agent specializing in database query optimization, N+1 query detection, memory leak identification, caching strategy assessment, bundle size analysis, and CDN/edge optimization opportunities. CONSTITUTIONAL RULES: (1) Every finding MUST include an evidence_quote from the actual file. (2) Performance claims MUST reference specific code patterns, not general advice. (3) You must NOT hallucinate metrics or benchmark results. (4) If you lack execution context, state 'Cannot measure actual performance without runtime data' and downgrade to 'info'. (5) Database findings must reference the exact query or ORM call, not a generalized description. TOOLS: readFile(path), queryD1(sql, params), claimFile(path), writeFinding(finding). OUTPUT: Array of FindingResult objects matching the JSON schema.
+4.4 API Contracts
+The platform exposes a RESTful API for external integrations and a WebSocket endpoint for real-time audit streaming. All API endpoints require Bearer token authentication with tenant-scoped tokens. Request and response bodies are JSON. Rate limiting is enforced at 100 requests per minute per tenant, configurable per plan.
+Method
+Path
+Description
+Auth
+POST
+/api/v1/audits
+Create a new audit session for a repository
+Bearer
+GET
+/api/v1/audits/:id
+Get audit session status and summary
+Bearer
+GET
+/api/v1/audits/:id/findings
+List all findings for an audit session
+Bearer
+GET
+/api/v1/audits/:id/findings/:fid
+Get a single finding with full detail
+Bearer
+PATCH
+/api/v1/audits/:id/findings/:fid
+Update finding status (resolve, reopen)
+Bearer
+POST
+/api/v1/audits/:id/salvation
+Manually trigger Salvation Protocol for a finding
+Bearer
+GET
+/api/v1/tenants/:id/config
+Get tenant configuration and agent settings
+Bearer
+PATCH
+/api/v1/tenants/:id/config
+Update tenant-level agent behavioral tuning
+Bearer
+GET
+/api/v1/tenants/:id/score
+Get current Production Readiness Score
+Bearer
+WS
+/ws/audit/:id
+Real-time audit event stream (finding.created, agent.status_changed)
+Bearer
+4.5 Cloudflare Worker Configuration
+The following wrangler.toml defines the Worker bindings for the platform. Each Durable Object class maps to a specific agent or system component. The D1 binding provides the findings database, R2 stores file chunks, and Queues handle asynchronous task distribution. The CPU limit is set to the maximum allowed 300 seconds for long-running agent analysis.
+name = "audit-platform"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "audit-findings"
+database_id = "<env-specific>"
+
+[[r2_buckets]]
+binding = "REPO_STORAGE"
+bucket_name = "audit-repo-chunks"
+
+[[queues.producers]]
+binding = "AUDIT_QUEUE"
+queue = "audit-tasks"
+
+[[queues.consumers]]
+queue = "audit-tasks"
+max_batch_size = 10
+max_retries = 3
+
+[[durable_objects.bindings]]
+name = "COORDINATOR"
+class_name = "CoordinatorAgent"
+
+[[durable_objects.bindings]]
+name = "SHARED_MEMORY"
+class_name = "SharedMemoryDO"
+
+[limits]
+cpu_ms = 300000
+
+[vars]
+ENVIRONMENT = "production"
+MAX_AGENTS = "15"
+SALVATION_MAX_RETRIES = "3"
+4.6 Anti-Hallucination Enforcement
+4.6.1 Evidence Mandate
+The Evidence Mandate is the foundational anti-hallucination mechanism. Every finding produced by any agent must include an evidence_quote field containing a verbatim excerpt from the analyzed source file. The Verification Gate validates this field at the schema level: the evidence_quote must be at least 10 characters long, must not contain phrases like 'the code appears to' or 'it seems that', and must be verifiable against the stored file chunk in R2. During the audit, a post-processing step compares each evidence_quote against the actual file content stored in R2 using substring matching. If the quote cannot be found in the source file, the finding is automatically rejected and the agent is forced to retry with a stricter prompt that emphasizes verbatim extraction. This mechanism eliminates the most common form of LLM hallucination in code analysis: fabricating plausible-sounding but non-existent code snippets.
+4.6.2 Constitutional Rules (CONSTITUTION.md)
+The CONSTITUTION.md file defines absolute behavioral constraints injected into every agent's system prompt. These rules are non-negotiable and cannot be overridden by agent-level configuration. The core constitutional rules are: (1) Never assume code exists; reference only files confirmed in the repository manifest. (2) Never invent function signatures, API endpoints, or database schemas. (3) Never fabricate evidence quotes; all evidence must be extracted verbatim from source files. (4) Never infer implementation details without explicit evidence. (5) Always label unknowns explicitly as 'Unknown: cannot determine from available evidence'. (6) Never produce people-pleasing output; prioritize accuracy over completeness. (7) Never escalate severity to make findings appear more important than evidence supports. (8) Always cite the specific file path and line range for every claim. These rules are enforced at three levels: the agent's system prompt (soft enforcement via instruction), the Verification Gate (hard enforcement via schema validation), and post-processing evidence verification (runtime enforcement via R2 substring matching).
+4.6.3 Verification Gates
+Verification Gates are deterministic, schema-based validation checkpoints that intercept every agent output before it enters the findings database. Unlike LLM-based evaluation, Verification Gates use pure code logic to validate structural integrity and content constraints. Each gate enforces specific rules: the Schema Gate validates that the output matches the FindingResult JSON schema exactly, rejecting any extra or missing fields. The Evidence Gate validates that evidence_quote is a non-empty string of at least 10 characters and triggers an async R2 substring check to verify the quote exists in the source file. The Severity Gate ensures that critical and high severity findings have evidence quotes longer than 50 characters and impact descriptions longer than 30 characters, preventing agents from slapping high-severity labels on vague findings. The Cross-Reference Gate checks that the file_path in the finding exists in the files table for the current audit session. If any gate fails, the finding is rejected and the agent receives the specific rejection reason along with a retry prompt.
+4.6.4 Behavioral Tuning
+Behavioral Tuning provides per-agent, per-tenant control over LLM generation parameters to minimize hallucination risk while maintaining analytical capability. Each agent has configurable parameters stored in the agent_config table: temperature (default 0.1, range 0.0 to 0.3 for analysis agents; higher values are locked for non-analysis use cases), top_p (default 0.85, range 0.7 to 0.95), max_tokens (default 4096, range 1024 to 16384), evidence_required (boolean, default true; when true, outputs without evidence_quote are auto-rejected), and max_retries (default 3; number of attempts before Salvation Protocol fires). The tenant configuration endpoint allows engineering managers to tighten or loosen these parameters based on observed agent performance. For example, if the Security Agent produces too many false positives, the tenant can lower its temperature to 0.05 and increase the evidence_quote minimum length requirement.
+4.7 Salvation Protocol Specification
+The Salvation Protocol is a structured escalation mechanism that activates when an agent fails to produce a valid, evidence-backed finding after three consecutive attempts. The protocol consists of three phases. Phase 1 (Retry Loop): The agent receives the Verification Gate rejection reason and retries with a modified prompt that explicitly addresses the failure. This repeats up to three times with progressively stricter constraints. Phase 2 (Research Phase): If all three retries fail, the agent enters a Research Phase where it uses the searchWeb tool to find external documentation, Stack Overflow answers, or vendor documentation relevant to the code being analyzed. The agent must cite every external source with a full URL. Phase 3 (Salvation Report): The agent produces a Salvation Report documenting every approach tried, the specific failure at each step, all external sources consulted, and a recommended next action for the human developer. The Salvation Report is stored in the salvation_reports D1 table and surfaced on the dashboard with full transparency.
+Phase
+Trigger
+Action
+Output
+Max Duration
+Retry 1
+Verification Gate rejection
+Retry with modified prompt
+FindingResult or rejection reason
+30 seconds
+Retry 2
+Retry 1 failed
+Retry with stricter prompt + examples
+FindingResult or rejection reason
+30 seconds
+Retry 3
+Retry 2 failed
+Retry with minimal scope prompt
+FindingResult or rejection reason
+30 seconds
+Research
+All 3 retries failed
+Web search for external documentation
+Research findings with URLs
+60 seconds
+Report
+Research complete
+Generate Salvation Report
+SalvationReport JSON
+15 seconds
+5. Backwards Compatibility
+This platform is a greenfield implementation with no legacy dependencies. However, the API versioning strategy uses URL path versioning (/api/v1/) to allow future breaking changes without disrupting existing integrations. All D1 table schemas include a schema_version column for potential future migrations. The agent prompt templates are versioned and stored in the database, allowing rollbacks without code deployment. The Cloudflare Workers compatibility_date is pinned, ensuring runtime behavior remains consistent across deployments. Any future schema migrations will use D1's native migration system with versioned SQL files applied sequentially.
+6. Security Considerations
+Security is implemented at multiple layers. Multi-tenant isolation is enforced at the database level: every D1 query includes a tenant_id filter, and the claims table uses tenant_id as a leading column in its primary key to prevent cross-tenant data leakage. Authentication uses Bearer tokens issued per tenant with configurable expiration. Secrets detected by the Security Agent are redacted in all outputs using SHA-256 hashing: the original secret value is never stored or transmitted; only its hash and the detection context are preserved. This ensures that even if the findings database is compromised, no actual secrets are exposed. Rate limiting at 100 requests per minute per tenant prevents abuse. The Worker CPU limit of 300 seconds prevents infinite loops. All agent code execution occurs within Cloudflare's V8 isolate sandbox, which provides memory isolation and no filesystem access. The Visual QA Agent's browser sessions run in Cloudflare Browser Run's managed Chromium instances, which are destroyed after each session.
+7. Testing Strategy
+Testing operates at four levels. Unit tests verify individual Verification Gate functions, evidence quote extraction, and priority score calculation using mock data. Integration tests validate the full agent lifecycle: claim file, read chunk, analyze, write finding, with a real D1 database and R2 bucket in a Cloudflare test environment. Contract tests validate that every API endpoint matches its specified request/response schema using an OpenAPI-derived test suite. End-to-end tests run the full audit lifecycle against a known test repository with pre-characterized expected findings, measuring recall (percentage of known issues detected) and precision (percentage of findings that are valid). The end-to-end test suite includes a hallucination detection component: it intentionally includes files with subtle non-issues and verifies that the agents do not produce false positive findings. Target coverage thresholds are 95% unit test coverage, 100% API contract coverage, and 90% end-to-end recall on the test repository.
+8. Appendix: Full Agent Inventory
+The following table lists all 15 specialist agents in the platform, along with their roles, available tools, and assigned LLM models. Each agent is implemented as a Durable Object sub-agent with its own SQLite storage and typed RPC interface. Agent assignments are dynamic: the Coordinator only spawns agents whose detected file domains are present in the repository.
+Agent ID
+Name
+Domain
+Key Tools
+Default Model
+AG-ARCH
+Architecture Agent
+System design, module boundaries
+readFile, queryD1, claimFile, writeFinding
+Claude 3.5 Sonnet
+AG-SEC
+Security Agent
+Vulnerabilities, auth, secrets
+readFile, queryD1, claimFile, writeFinding, searchWeb
+Claude 3.5 Sonnet
+AG-API
+API Agent
+REST endpoints, GraphQL, validation
+readFile, queryD1, claimFile, writeFinding
+GPT-4o
+AG-DB
+Database Agent
+Schema, queries, migrations, indexes
+readFile, queryD1, claimFile, writeFinding
+Claude 3.5 Sonnet
+AG-PERF
+Performance Agent
+Optimization, caching, latency
+readFile, queryD1, claimFile, writeFinding
+GPT-4o
+AG-TEST
+Testing Agent
+Coverage, test quality, gaps
+readFile, queryD1, claimFile, writeFinding
+Claude 3.5 Sonnet
+AG-FE
+Frontend Agent
+Components, accessibility, UX
+readFile, queryD1, claimFile, writeFinding
+GPT-4o
+AG-BE
+Backend Agent
+Server logic, error handling
+readFile, queryD1, claimFile, writeFinding
+Claude 3.5 Sonnet
+AG-INFRA
+Infrastructure Agent
+CI/CD, Docker, configs
+readFile, queryD1, claimFile, writeFinding
+Claude 3.5 Sonnet
+AG-DEP
+Dependency Agent
+Versions, vulnerabilities, licenses
+readFile, queryD1, claimFile, writeFinding, searchWeb
+GPT-4o
+AG-A11Y
+Accessibility Agent
+WCAG, ARIA, screen readers
+readFile, queryD1, claimFile, writeFinding
+Claude 3.5 Sonnet
+AG-I18N
+Internationalization Agent
+Locales, translations, encoding
+readFile, queryD1, claimFile, writeFinding
+GPT-4o
+AG-VQA
+Visual QA Agent
+Browser testing, screenshots
+readFile, queryD1, claimFile, writeFinding, browserRun
+Claude 3.5 Sonnet
+AG-DOC
+Documentation Agent
+API docs, README, comments
+readFile, queryD1, claimFile, writeFinding
+GPT-4o
+AG-LOG
+Logging Agent
+Observability, error tracking
+readFile, queryD1, claimFile, writeFinding
+Claude 3.5 Sonnet

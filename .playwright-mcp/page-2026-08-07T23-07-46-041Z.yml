@@ -1,0 +1,31 @@
+- generic [active] [ref=f1e1]:
+  - navigation [ref=f1e2]:
+    - generic [ref=f1e3]: AuditEngine
+    - generic [ref=f1e4]:
+      - link "Home" [ref=f1e5] [cursor=pointer]:
+        - /url: /
+      - link "New Audit" [ref=f1e6] [cursor=pointer]:
+        - /url: /audit/new
+      - link "Dashboard" [ref=f1e7] [cursor=pointer]:
+        - /url: /dashboard
+  - main [ref=f1e8]:
+    - heading "Start New Audit" [level=1] [ref=f1e9]
+    - generic [ref=f1e10]:
+      - generic [ref=f1e11]: Audit Run ID
+      - textbox "Audit Run ID" [ref=f1e12]:
+        - /placeholder: run-2026-08-08-001
+      - generic [ref=f1e13]: Leave blank to auto-generate. Use only letters, numbers, dashes, and underscores.
+    - generic [ref=f1e14]:
+      - generic [ref=f1e15]: Source Files
+      - button "Source Files" [ref=f1e16]
+      - generic [ref=f1e17]: Select one or more text files (source code, configs, docs). Files are read as UTF-8 text.
+      - generic [ref=f1e18]: No files selected.
+    - generic [ref=f1e19]:
+      - generic [ref=f1e20]: Or Paste Files (JSON array)
+      - textbox "Or Paste Files (JSON array)" [ref=f1e21]:
+        - /placeholder: "[{\"path\":\"src/index.ts\",\"content\":\"console.log(1);\"}]"
+      - generic [ref=f1e22]: "If you paste JSON here, it overrides file selection. Format: array of {path, content}."
+    - generic [ref=f1e23]:
+      - button "Start Audit" [ref=f1e24] [cursor=pointer]
+      - link "Go to Dashboard" [ref=f1e25] [cursor=pointer]:
+        - /url: /dashboard

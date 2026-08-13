@@ -1,0 +1,393 @@
+S E N I O R   D E V E L O P E R   P L A Y B O O K
+AuditEngine Build Guide
+Building an Anti-Hallucination Multi-Agent Platform with AI Agents and Video Coding
+Senior Developer Playbook  |  Phase-by-Phase Construction Strategy
+Battle-Hardened AI Taming Techniques  |  Anti-Hallucination Arsenal
+Cloudflare Workers + Durable Objects + D1 + R2 + AI Gateway
+Version 1.0  |  August 2026
+Confidential  |  Internal Engineering
+1. Executive Summary
+This document is a battle-hardened playbook for constructing the AuditEngine platform, an Anti-Hallucination Multi-Agent AI Engineering Audit Platform, using AI coding agents and video coding sessions. It is written from the perspective of a senior developer who has built production multi-agent systems on Cloudflare edge infrastructure and understands exactly where AI agents hallucinate, shortcut, and silently introduce architectural rot. Every recommendation in this guide is grounded in the specific constraints of the AuditEngine architecture: Cloudflare Workers with 128MB memory limits, Durable Objects with hibernation behavior, D1 with its 10GB ceiling, R2 for chunk storage, and the Kimi K3/K2.6/MiniMax M3 model routing required by the token budget system.
+The guide is organized around the five-phase implementation plan from your documentation: Phase 1 (Foundation, Weeks 1-3), Phase 2 (Core Agent System, Weeks 4-7), Phase 3 (Full Agent Roster and Enforcement, Weeks 8-11), Phase 4 (Advanced Features, Weeks 12-14), and Phase 5 (Production Hardening, Weeks 15-16). For each phase, you will find three things: a build strategy explaining what to construct and in what order, a video coding session script that provides the exact prompts you should paste into your AI agent during a recording session, and an anti-hallucination checklist specific to that phase's unique risks. The video coding scripts are designed to be read aloud during a live coding session, giving your audience a transparent view of how a senior developer directs an AI agent to produce production-quality code rather than plausible-looking garbage.
+The anti-hallucination material is not generic advice. It is specifically calibrated to the traps that AuditEngine's architecture presents: the temptation to let the AI generate all 15 agent types at once instead of building them incrementally, the risk of the AI fabricating Cloudflare API calls that do not exist, the danger of the AI generating D1 schemas that silently differ from the documented specification, and the critical importance of building the Verification Gate and llmCall() middleware before any agent analysis code. If you follow this guide phase by phase, resisting the urge to skip ahead, you will arrive at a working platform that actually enforces the anti-hallucination guarantees your documentation describes, rather than a system that merely claims to enforce them.
+1.1 Why This Guide Exists
+Your documentation suite is exceptional: the PRD, RFC, Architecture, Gap Analysis, Implementation Plan, Lifecycle Verification, and Agent Documentation collectively describe a system with zero ambiguity about data flow, enforcement layers, agent constitutions, and verification gates. However, there is a fundamental gap between having a perfect specification and successfully building it with AI coding agents. The gap is this: AI agents do not read your documents the way a human engineer does. They skim, they pattern-match, and they fill in gaps with plausible fabrications. A human reading your D1 schema will notice that the claims table uses a composite unique constraint on (audit_run_id, file_path) and will ensure the TypeScript code enforces this. An AI agent will generate a claims table with a simple integer primary key and confidently claim it matches the spec. This guide bridges that gap by providing the exact prompts, context-loading strategies, and verification checkpoints that force the AI agent to produce code that actually matches your specification.
+2. Build Strategy Overview
+2.1 The Incremental Dependency Principle
+The single most important rule for building AuditEngine with AI agents is this: never build a component that depends on a component you have not yet verified. This sounds obvious, but it is the rule most frequently violated when developers use AI agents, because the agent will happily generate code that imports modules that do not exist yet, call functions that have not been defined, and reference environment variables that have not been configured. The result is a codebase that looks complete when you read individual files but does not compile, does not deploy, and does not work. The AuditEngine architecture is particularly vulnerable to this because it has deep dependency chains: the Coordinator depends on the Agent Registry in D1, which depends on the schema migration, which depends on the wrangler.toml configuration, which depends on the D1 binding being set up in the Cloudflare dashboard.
+The practical implication is that each phase must produce a verified, deployable increment. After Phase 1, you must be able to run wrangler deploy and have a Worker that accepts HTTP requests, connects to D1, and stores data in R2. After Phase 2, you must be able to upload a test repository, see it chunked in R2, and have the Coordinator spawn three agents that each claim files and produce at least one finding that passes the Verification Gate. Each phase is a checkpoint. If the checkpoint fails, you fix it before proceeding. This is not just good engineering practice; it is the only way to prevent the AI from accumulating undetected errors that compound across phases and become impossible to debug.
+2.2 Context Loading: The Most Critical Skill
+When using an AI agent to build AuditEngine, the single most important skill is context loading. Every video coding session should begin by loading the relevant section of your documentation into the agent's context window. Never ask the agent to build from memory or from a vague description. The exact protocol is: (1) Paste the relevant specification section, (2) Ask the agent to repeat back the key constraints before writing any code, (3) Verify the agent's understanding matches your specification, (4) Only then ask for the implementation. This three-step protocol, which I call Specify-Confirm-Build, is the single most effective technique for preventing hallucination. It works because it forces the agent to demonstrate understanding before it starts generating code, and any misunderstanding is caught at the confirmation step rather than after hours of debugging generated code.
+For video coding specifically, this protocol is compelling content. Your audience sees you paste a specification, watch the AI agent summarize it back, and then watch it generate code that demonstrably matches the specification. This is far more engaging and educational than watching someone paste a one-line prompt and accepting whatever the agent produces. It also builds your credibility as a developer who understands that AI agents are tools that require skillful direction, not magic wands that produce correct code from vague instructions.
+2.3 The Seven-Step Session Protocol
+Every video coding session for AuditEngine should follow this structure. First, open a new session or clear the agent's context. Do not carry over context from a previous session unless it is directly relevant; stale context is a primary source of hallucination. Second, load the specification for the component you are building. Third, ask the agent to describe the implementation approach before writing code. Fourth, have the agent write the code. Fifth, immediately run the code against the exit criteria from your Implementation Plan. Sixth, if the code fails the exit criteria, do not let the agent explain away the failure; instead, paste the error output and ask for a fix. Seventh, once the code passes, commit it and close the session. This seven-step cycle should be repeated for every deliverable in every phase. Each cycle is one video or one video segment.
+3. Phase 1: Foundation (Weeks 1-3)
+3.1 What You Are Building
+Phase 1 produces the skeleton that everything else depends on. The deliverables are: P1-D01 Worker Skeleton (wrangler.toml with all Durable Object bindings, D1/R2/Queue configuration), P1-D02 D1 Schema (all 8 tables with indexes, foreign keys, and constraints), P1-D03 R2 Storage (file chunk upload, retrieval, and deletion operations), P1-D04 Ingestion Worker (file chunking at 500-line segments with domain tagging and manifest writing), P1-D05 API Gateway (auth middleware, tenant routing, rate limiting, error handling), and P1-D06 Dashboard Shell (Cloudflare Pages app with login, tenant selector, and audit list). The exit criteria are clear and verifiable: wrangler deploy succeeds, all bindings are verified, the schema migration runs, all 8 tables are queryable, 100 chunks can be uploaded and retrieved with 100% fidelity, 3 test repos can be ingested with verified chunk counts, all API endpoints return correct status codes, and the dashboard renders with a working auth flow.
+3.2 Build Order and Dependencies
+Step
+Deliverable
+Depends On
+Why This Order
+1
+wrangler.toml + project skeleton
+Nothing
+Everything needs bindings configured
+2
+D1 schema (schema.sql)
+Step 1
+Tables must exist before any code queries them
+3
+R2 storage module
+Step 1
+Ingestion needs somewhere to store chunks
+4
+Ingestion Worker
+Steps 2 + 3
+Needs D1 for manifest, R2 for chunks
+5
+API Gateway + auth
+Step 1
+Routes need Worker to handle HTTP
+6
+Dashboard shell
+Step 5
+Needs API endpoints to call
+3.3 Video Coding Session Scripts
+Below are the exact session scripts for Phase 1. Each script represents one video or video segment. Read the CONTEXT block aloud as you paste it into the agent. Then read the PROMPT block. Wait for the agent to respond before proceeding.
+Session 1: Project Skeleton and wrangler.toml
+CONTEXT: We are building AuditEngine, a multi-agent AI audit platform on Cloudflare Workers. The tech stack is: Workers for compute, Durable Objects for stateful agents, D1 (SQLite) for structured data, R2 for file chunk storage, Queues for async task distribution, Cloudflare AI Gateway for LLM routing, and Cloudflare Pages for the dashboard. The project uses TypeScript. We need a wrangler.toml that configures all of these bindings.
+PROMPT: Create a Cloudflare Worker project with wrangler.toml configured for the following bindings: (1) A D1 database named 'audit-engine-db'. (2) An R2 bucket named 'audit-engine-chunks'. (3) A Queue named 'audit-queue'. (4) Durable Object bindings for: CoordinatorAgent, IngestionWorker, and a WebSocket DO for real-time events. (5) AI Gateway binding for LLM calls. (6) Set compatibility_date to '2024-09-23' or later. (7) Set main entry to 'src/index.ts'. Generate the wrangler.toml, a minimal src/index.ts that exports the CoordinatorAgent and IngestionWorker DO classes as stubs, and a tsconfig.json. Do NOT generate any implementation logic yet, only the configuration and class stubs.
+TIP: Before moving to Session 2, run 'npx wrangler dev' and verify the Worker starts without errors. If it fails, fix the wrangler.toml configuration before proceeding.
+Session 2: D1 Database Schema
+CONTEXT: The D1 schema must include 8 tables: tenants (id TEXT PK, name, plan, timestamps), audit_sessions (id TEXT PK, tenant_id FK, repo_url, repo_branch, status, total_files, files_analyzed, findings_count, readiness_score, timestamps), files (id TEXT PK, tenant_id FK, audit_session_id FK, path, language, domain_tag, line_count, chunk_count, r2_key, last_analyzed_at, content_hash, UNIQUE on tenant+session+path), claims (agent_id, file_path, audit_run_id, tenant_id, claimed_at, status, PK on all 4 columns), findings (id TEXT PK, finding_id UNIQUE, audit_run_id, agent_id, severity CHECK enum, category, file_path, line_range, evidence_quote, description, impact, status, priority_score, is_regression, recurrence_count, timestamps), salvation_reports (id PK, tenant_id FK, finding_id FK, audit_session_id FK, agent_id, attempts JSON, research_findings JSON, external_sources JSON, recommended_action, status, timestamp), agent_config (id PK, tenant_id FK, agent_id, model_provider, model_name, temperature, top_p, max_tokens, evidence_required, max_retries, UNIQUE on tenant+agent), audit_logs (id PK, tenant_id FK, audit_session_id FK, agent_id, event_type, event_data JSON, timestamp).
+PROMPT: Create a src/db/schema.sql file with all 8 tables for the AuditEngine platform. Every table MUST include: tenant_id as the first non-PK column for multi-tenant isolation, created_at and updated_at timestamps, and appropriate indexes for the primary query patterns. The claims table MUST have a composite PRIMARY KEY on (agent_id, file_path, audit_run_id, tenant_id). The findings table severity column MUST have a CHECK constraint enforcing only 'critical', 'high', 'medium', 'low', 'info'. Use TEXT for all primary keys (UUIDs), INTEGER for the auto-increment id columns. Also create a src/db/migrate.ts that applies this schema using wrangler d1 execute. Show me the complete SQL and the migration script.
+WARNING: Do NOT let the agent simplify or skip columns. Compare every table definition against the schema in the AuditEngine documentation. The agent will frequently omit the UNIQUE constraint on claims or the CHECK on findings.severity. These are not optional.
+Session 3: R2 Storage Module
+CONTEXT: R2 stores repository file chunks using the key structure: {tenant_id}/{audit_session_id}/{file_path_hash}/{chunk_index}. Each chunk is plain text with UTF-8 encoding, maximum 500 lines. The R2 module must support: uploadChunk(tenantId, sessionId, filePath, content, chunkIndex), getChunk(tenantId, sessionId, filePathHash, chunkIndex), deleteChunk(key), and listChunks(tenantId, sessionId). The file path hash is SHA-256 of the full file path.
+PROMPT: Create a src/lib/r2-storage.ts module that wraps all R2 operations for the AuditEngine platform. It must export functions for: uploadChunk (stores a file chunk with key format {tenant_id}/{audit_session_id}/{sha256(filePath)}/{chunkIndex}), getChunk (retrieves a chunk by key), deleteChunk (deletes by full key), and listChunks (lists all chunks for a session). Use the R2 binding from the Cloudflare Worker env. Import the hash function from a separate src/lib/utils.ts. Include proper error handling and TypeScript types. Also create a src/lib/utils.ts with the sha256 hash function and any shared utilities.
+Session 4: Ingestion Worker
+CONTEXT: The Ingestion Worker is the Phase 0 blocking gate. It accepts a repository as a zip upload, walks every file, chunks each file into segments of 500 lines or fewer, tags each file with a detected domain (frontend, backend, config, test, infra, smart-contract), computes a SHA-256 content hash for each file, stores chunks in R2, writes file metadata to the D1 files table, and emits a repo.ready event to the Coordinator. Domain tagging uses file extension and path heuristics: .tsx/.jsx/.vue/.svelte = frontend, .ts/.js (in /api or /server or /backend) = backend, .test.ts/.spec.ts/.test.js = test, .sql/.prisma = database, Dockerfile/docker-compose.yml/.github/workflows = infra, .sol = smart-contract. If ingestion fails or produces an empty manifest, it must halt and alert.
+PROMPT: Create src/workers/ingestion.ts as a Cloudflare Worker that handles repository ingestion. It must: (1) Accept POST /api/v1/ingest with multipart form data containing a zip file. (2) Extract the zip and walk all files. (3) For each file: read content, compute SHA-256 content hash, detect language and domain tag, chunk at 500-line boundaries, store each chunk in R2 using the key format {tenant_id}/{audit_session_id}/{sha256(filePath)}/{chunk_index}. (4) Write file metadata to the D1 files table (path, language, domain_tag, line_count, chunk_count, r2_key, content_hash). (5) Write/update the audit_sessions record with total_files count. (6) Return a manifest summary. Domain detection should use file extensions and path patterns. The Worker must be exported as a Durable Object class called IngestionWorker. Include comprehensive error handling: if any file fails to chunk, the entire ingestion fails and returns a 500 with details.
+Session 5: API Gateway
+CONTEXT: The API Gateway handles HTTP routing, authentication (Bearer token with JWT claims for tenant_id, plan, expiration), tenant routing (injects tenant_id into request context), rate limiting (tiered: 200 read + 20 write per minute per tenant), and error handling. It dispatches requests to the appropriate Durable Object or Worker. Key routes: POST /api/v1/audits (create audit session), GET /api/v1/audits/:id (get audit status), POST /api/v1/audits/:id/ingest (trigger ingestion), GET /api/v1/audits/:id/findings (get findings), GET /api/v1/audits/:id/tasks (get task board), WS /ws/audit/:id (WebSocket for real-time events).
+PROMPT: Create src/index.ts as the main Cloudflare Worker entry point that implements the API Gateway. It must: (1) Implement JWT Bearer token authentication middleware that extracts tenant_id and plan from the token claims. (2) Implement tiered rate limiting: 200 read requests/minute and 20 write requests/minute per tenant_id. (3) Route requests to the appropriate handlers. (4) Implement structured error responses with consistent JSON format {error: string, code: string, details?: string}. (5) Handle CORS for the Cloudflare Pages dashboard. (6) Implement the WebSocket upgrade handler for /ws/audit/:id that delegates to the WebSocket Durable Object. Include all route handlers as stub functions that return 501 Not Implemented for now, except GET /health which returns {status: 'ok'}.
+3.4 Phase 1 Anti-Hallucination Checklist
+Check
+Why It Matters
+How to Verify
+D1 schema matches documentation exactly
+Agent will often omit UNIQUE constraints, CHECK constraints, or composite PKs
+Diff schema.sql against the AuditEngine doc Section 10.1
+R2 key format matches specification
+Agent may use a different key structure
+Upload a chunk, then list R2 keys and verify format
+500-line chunk limit is enforced
+Agent may use arbitrary chunk sizes
+Upload a 1200-line file, verify exactly 3 chunks
+Domain tagging matches documented tags
+Agent may add or remove domain categories
+Upload files with known extensions, verify tags
+All API routes return correct status codes
+Agent may use wrong HTTP methods or status codes
+Run curl against every endpoint
+tenant_id is in every D1 query
+Agent may forget tenant isolation
+Check every database query in the codebase
+4. Phase 2: Core Agent System (Weeks 4-7)
+4.1 What You Are Building
+Phase 2 is where the system becomes an actual multi-agent platform. You will build the Coordinator Agent (P2-D01) as a Durable Object that reads the manifest, decides which agents to spawn, writes the Agent Registry to D1, and emits spawn commands. Then you will build three specialist agents: Security Agent (P2-D02), Architecture Agent (P2-D03), and Performance Agent (P2-D04), each implementing the full CLAIM-READ-ANALYZE-WRITE-COMPLETE lifecycle with the ReAct loop. You will also build the Claims System (P2-D05) for atomic file claiming, the Verification Gate (P2-D06) that rejects fabricated findings, the WebSocket Stream (P2-D07) for real-time dashboard updates, and the AI Gateway Integration (P2-D08) for multi-provider LLM routing. By the end of Phase 2, you must be able to upload a small test repository, see the Coordinator spawn three agents, watch each agent claim files, produce findings, and see those findings pass the Verification Gate and appear on the dashboard in real time.
+4.2 Build Order and Dependencies
+Step
+Deliverable
+Depends On
+Why This Order
+1
+llm-gateway.ts + model-router.ts
+Phase 1 complete
+All agents call LLM through this single choke point
+2
+gate.ts (Verification Gate)
+Step 1
+Gate validates agent output before DB write
+3
+Constitution files (universal + 3 agents)
+Step 1
+Constitutions injected into every agent prompt
+4
+Claims system + file claiming logic
+Phase 1 D1 schema
+Agents must claim files before analyzing
+5
+Coordinator Agent DO
+Steps 2-4
+Orchestrates everything else
+6
+Security Agent DO
+Steps 2-5
+First specialist agent
+7
+Architecture Agent DO
+Steps 2-5
+Second specialist agent
+8
+Performance Agent DO
+Steps 2-5
+Third specialist agent
+9
+WebSocket event stream
+Step 5
+Dashboard needs real-time updates
+10
+End-to-end test with test repo
+All steps
+Verify the full pipeline works
+4.3 Video Coding Session Scripts
+Session 6: llm-gateway.ts and model-router.ts
+CONTEXT: The llm-gateway.ts is the single choke point for ALL LLM calls in the system. No agent ever calls a model API directly. The gateway must: (1) Route to the correct model based on task type and agent, using these rules: deep_audit tasks for architecture/security agents use Kimi K3, deep_audit for API/database agents use Kimi K2.6, verification tasks use Kimi K2.6, gate_retry tasks use MiniMax M3 (NEVER Kimi K3 for retries), dedup/task_description/log_summary tasks use MiniMax M3, any task with input over 100k tokens auto-overrides to Kimi K2.6. (2) Count token usage before and after every call. (3) Check run_budget.paused = 1 before every call and throw BudgetExhaustedError if paused. (4) Log every call to the token_usage table in D1. (5) Handle multi-provider fallback. The model-router.ts implements the routing logic as a pure function.
+PROMPT: Create two files: src/lib/llm-gateway.ts and src/lib/model-router.ts. The model-router.ts must export a function getRoutingConfig(taskType: string, agentId: string, inputTokenCount: number) that returns {provider, modelName, maxTokens, budget}. Implement the exact routing rules: deep_audit + architecture = Kimi K3 (200K budget), deep_audit + security = Kimi K3 (150K budget), salvation_research = Kimi K3 (80K budget), deep_audit + api = Kimi K2.6 (80K), deep_audit + database = Kimi K2.6 (60K), verification = Kimi K2.6 (40K), gate_retry = MiniMax M3 (8K), dedup = MiniMax M3 (12K), task_description = MiniMax M3 (6K), qa_script_gen = MiniMax M3 (16K), log_summary = MiniMax M3 (10K), fallback = MiniMax M3 (20K), override for input > 100K = Kimi K2.6 (130K). The llm-gateway.ts must export an async function llmCall(env, taskType, agentId, systemPrompt, userMessage, options?) that routes through the model router, checks budget, calls the AI Gateway, counts tokens, logs usage to D1, and returns the response. This is the ONLY function agents should use for LLM calls.
+WARNING: This is the most critical file in the entire system. If the AI generates a gateway that does not enforce budget checks or does not count tokens, the entire budget enforcement system is bypassed.
+Session 7: Verification Gate (gate.ts)
+CONTEXT: The Verification Gate is TypeScript code, NOT an LLM check. It validates every agent output before it reaches D1. Gate 1 validates the Finding schema: finding_id (format F-NNNN), audit_run_id, agent_id, severity (enum), category, file (exact path, must be in claim log), line_range, evidence_quote (min 8 chars), description, impact (required for critical/high), verified_by. Gate 2 validates task closure: requires valid commit SHA, diff must touch the referenced file, frontend tasks require Visual QA re-run, security tasks require regression scan, critical tasks require human sign-off. Gate 3 is the Salvation Protocol trigger: 3 rejections then activate Salvation. The gate must also scan for banned phrases.
+PROMPT: Create src/lib/gate.ts implementing the three Verification Gates for the AuditEngine platform. Gate 1 (validateFinding): Takes a parsed agent output, checks all required fields are present and correctly typed, checks evidence_quote is at least 8 characters, checks impact field exists for critical/high severity, checks the file is in the agent's claim log, and scans the description and evidence_quote for banned phrases. Returns {passed: boolean, reason?: string}. Gate 2 (validateTaskClosure): Takes a task, commit SHA, and original finding. Validates the SHA exists (placeholder for GitHub API call), the diff touches the referenced file, and the appropriate additional checks pass based on task domain. Gate 3 (checkSalvationTrigger): Takes a finding_id and rejection count. Returns true if rejection count >= 3, triggering the Salvation Protocol. Export all three functions and the BANNED_PHRASES array.
+Session 8: Coordinator Agent
+CONTEXT: The Coordinator Agent is a Durable Object that NEVER analyzes code. Its only jobs: read the repository manifest from D1 after ingestion completes, decide which specialist agents to spawn based on detected file domains, write the Agent Registry to D1 with every agent ID, domain, status, and assigned file domains, set the global audit_run_id UUID, emit spawn commands to each sub-agent via typed RPC, track agent status transitions (idle, running, blocked, done), trigger the Priority Resolver Workflow when all agents report done, halt all agents if budget.paused = 1, and spawn Verification Agents when tasks move to In Review. It monitors the Agent Registry in D1 every 30 seconds.
+PROMPT: Create src/workers/coordinator.ts as a Cloudflare Durable Object class called CoordinatorAgent. It must implement: (1) An alarm that fires every 30 seconds to poll agent statuses from the Agent Registry in D1. (2) A spawnAgents(auditRunId) method that reads the files table, determines which domains exist, and spawns only the relevant specialist agents. (3) A status check that reads run_budget.paused and halts all agents if true. (4) A triggerPriorityResolver(auditRunId) method called when all agents report status = done. The Coordinator MUST NOT: analyze files, file findings, write fix code, or make priority decisions. Export the class with proper TypeScript types.
+Session 9: Security Agent (First Specialist)
+CONTEXT: The Security Agent uses Kimi K3 for deep_audit tasks with a 150K token budget. It operates the CLAIM-READ-ANALYZE-WRITE-COMPLETE lifecycle. CLAIM: Insert a claim row to D1. READ: Fetch file chunk from R2. READ CROSS-AGENT: Query findings table for related files. ANALYZE: Send chunk + constitution-injected prompt via llmCall(). PARSE: Extract structured findings. WRITE: Insert each finding through the Verification Gate. BROADCAST: Emit finding.created event. LOOP: Claim next unclaimed file. The constitution requires: execution trace for auth features (7 steps), specific finding categories (11 categories), severity calibration (4 levels), and secret redaction. Evidence strictness is 9/10 (highest).
+PROMPT: Create src/workers/agents/security-agent.ts as a Cloudflare Durable Object implementing the Security Agent. It must: (1) Read the Universal and Security constitutions from src/constitutions/ before every analysis turn. (2) Implement the CLAIM-READ-CROSS_AGENT-ANALYZE-PARSE-WRITE-BROADCAST-LOOP lifecycle. (3) Use llmCall() for all LLM calls with taskType = 'deep_audit'. (4) Pass every finding through the Verification Gate. (5) Persist file queue cursor to survive hibernation. (6) Check run_budget.paused before every llmCall(). (7) Redact secrets as SECRET_REDACTED_[first4chars]. (8) Implement ReAct loop with max 5 iterations per chunk and 150K token budget.
+4.4 Phase 2 Anti-Hallucination Checklist
+Check
+Why It Matters
+How to Verify
+All agents use llmCall(), never fetch()
+If agents bypass the gateway, budget enforcement is void
+Search codebase for fetch( outside llm-gateway.ts
+Verification Gate is TypeScript, not LLM
+LLM-based validation can itself hallucinate
+Read gate.ts: zero AI/LLM calls, only schema checks
+Banned phrases list is complete
+Agent will produce sycophantic output if list is incomplete
+Compare against AuditEngine doc Section 5
+Coordinator never analyzes files
+The most common hallucination: agents doing each other's jobs
+Read coordinator.ts: zero file reading, zero finding filing
+Evidence quote is 8+ chars minimum
+Short evidence is usually fabricated
+Submit test finding with 3-char evidence, verify rejection
+Claim atomicity is enforced
+Duplicate analysis = wasted tokens
+Run 3 agents concurrently, verify zero duplicate claims
+Token budget is checked before every call
+Without this, a single audit can cost unlimited money
+Set 50K budget, verify audit halts at limit
+5. Phase 3: Full Agent Roster and Enforcement (Weeks 8-11)
+5.1 What You Are Building
+Phase 3 is the largest phase and the one where hallucination risk is highest. You are adding 12 additional specialist agents (P3-D01), implementing the complete anti-hallucination enforcement stack with CONSTITUTION.md injection (P3-D02), the evidence verification pipeline with R2 substring matching (P3-D03), behavioral tuning with per-agent temperature/top_p configuration (P3-D04), the Salvation Protocol with 3-strike retry and Research Phase (P3-D05), the Token Budget Manager with session-level and per-agent limits (P3-D06), secrets redaction with pre-LLM pattern redaction and post-analysis hash redaction (P3-D07), the Production Readiness Score calculation (P3-D08), and the deterministic Priority Resolver Workflow (P3-D09). This phase transforms the platform from a working 3-agent prototype into a production-grade 15-agent system with the full anti-hallucination guarantees your documentation describes.
+5.2 The Agent Factory Pattern
+Building 12 additional agents individually would be tedious and error-prone. Instead, use the Agent Factory pattern: create a generic BaseAgent class that implements the CLAIM-READ-ANALYZE-WRITE-COMPLETE lifecycle, and then create each specialist agent as a thin subclass that only provides its constitution file, domain tags, and model routing configuration. The base class handles all lifecycle management, claim persistence, cross-agent awareness polling, budget checking, and Verification Gate submission. This pattern ensures that all 15 agents behave consistently and that any bug in the lifecycle is fixed once rather than 15 times. For video coding, the Agent Factory is a single session where you build the base class, followed by shorter sessions where you create each specialist agent by providing only its unique configuration.
+Session 10: BaseAgent Factory + Agent Config
+CONTEXT: We need a BaseAgent class that all 15 specialist agents extend. The base class handles: file claiming from D1, file chunk retrieval from R2, cross-agent awareness (reads findings table every 30 seconds for related files), the ReAct loop (max 5 iterations per chunk, bounded by token budget), LLM calls via llmCall(), finding submission through the Verification Gate, queue cursor persistence, budget checking, and status updates to the Agent Registry. Each specialist agent only provides: its constitution content, its domain tags, and its model routing config.
+PROMPT: Create src/workers/agents/base-agent.ts as an abstract base Durable Object class. Implement the full CLAIM-READ-CROSS_AGENT-ANALYZE-PARSE-WRITE-BROADCAST-LOOP lifecycle. The class takes a configuration object with: agentId, domainTags, constitutionContent, and modelConfig. Implement: (1) Atomic file claiming with UNIQUE constraint error handling. (2) R2 chunk fetching. (3) Cross-agent awareness: query findings table for related files. (4) ReAct loop with max 5 iterations and token budget. (5) Finding validation through the Verification Gate. (6) Queue cursor persistence. (7) Status updates. Design so a specialist agent can be created in under 50 lines by extending this base.
+Session 11: Remaining 12 Specialist Agents
+CONTEXT: Using the BaseAgent factory, create the remaining 12 specialist agents: API Agent, Database Agent, Testing Agent, Frontend Agent, Backend Agent, Infrastructure Agent, Dependency Agent, Accessibility Agent, I18n Agent, Documentation Agent, Logging Agent, and Refactoring Agent. Each needs: a constitution file at src/constitutions/{type}.md extending the Universal Constitution with domain-specific rules, an implementation file at src/workers/agents/{type}.ts extending BaseAgent with correct domain tags and model config.
+PROMPT: Using the BaseAgent class, create 12 specialist agents. For each: (1) a constitution file at src/constitutions/{agent-type}.md extending the Universal Constitution with domain-specific rules, (2) an agent implementation at src/workers/agents/{agent-type}.ts extending BaseAgent with correct domain tags and model config. The agents: api, database, testing, frontend, backend, infrastructure, dependency, accessibility, i18n, documentation, logging, refactoring. Generate all 24 files.
+WARNING: Verify that each constitution contains domain-specific rules, not generic advice. The Security Agent constitution is the gold standard: it has execution trace requirements, specific finding categories, severity calibration, and secret redaction rules. Every other agent must have the same level of specificity.
+Session 12: Salvation Protocol
+CONTEXT: The Salvation Protocol activates when an agent fails 3 Verification Gate rejections. Implemented as a Cloudflare Workflow with 5 steps: Retry 1 with rejection reason, Retry 2 with stricter prompt including correct examples, Retry 3 with minimal-scope prompt, Research Phase with web search (OWASP, NVD, GitHub Issues, Stack Overflow), and Salvation Report generation with all attempts, external sources with cited URLs, and human_recommendation. SalvationReport fields: salvation_id (SAL-NNNN), audit_run_id, agent_id, finding_id, attempts array, research_sources array, human_recommendation, estimated_effort (S/M/L/XL), blocking_task_ids, broadcast_message, status.
+PROMPT: Create src/workers/salvation-protocol.ts as a Cloudflare Workflow. Implement the 5-step escalation: 3 retries with progressively stricter prompts, then Research Phase with web search, then Salvation Report generation. Store in salvation_reports D1 table. Broadcast to all agents. Flag dependent tasks as blocked. Export the Workflow class.
+Session 13: Evidence Verification Pipeline
+CONTEXT: The Evidence Verification Pipeline ensures every finding's evidence_quote is grounded in actual source code. 3 stages: (1) Schema Check: verify evidence_quote exists, min 10 chars, no hallucination phrases. (2) R2 Substring Match: fetch file chunk from R2, search for evidence_quote as substring. If exact fails, fuzzy match with Levenshtein distance threshold 3. (3) Verdict: reject with EVIDENCE_NOT_FOUND if neither match succeeds, tag evidence_verified=true if match found.
+PROMPT: Create src/lib/evidence-verifier.ts implementing the 3-stage Evidence Verification Pipeline. Stage 1: Schema check. Stage 2: R2 substring match with Levenshtein fuzzy fallback (threshold 3). Stage 3: Return verdict {verified, matchType, distance?, error?}. Export the verifyEvidence function.
+Session 14: Token Budget Manager
+CONTEXT: Token Budget Manager as a Durable Object. Tracks cumulative token usage per audit session. Configurable limits: 100K for free plan, 1M for paid. Thresholds: 50% dashboard alert, 80% pause non-critical agents (Testing, Documentation, Performance), 95% halt ALL agents set paused=1, 100% no llmCall allowed (BudgetExhaustedError). Also: >10 gate rejects in 5 minutes = agent stuck detection.
+PROMPT: Create src/workers/token-budget-manager.ts as a Durable Object. Implement: checkBudget, recordUsage, getUsageSummary. Implement all 4 threshold levels and stuck detection.
+5.4 Phase 3 Anti-Hallucination Checklist
+Check
+Why It Matters
+How to Verify
+All 12 new constitutions are domain-specific
+Generic constitutions produce generic findings
+Read each constitution, verify domain-specific rules
+Evidence verification runs on every finding
+Without this, agents can fabricate evidence quotes
+Submit 20 real + 20 fabricated quotes, verify 100% rejection
+Salvation Protocol triggers after exactly 3 failures
+Too few = wasted retries, too many = wasted budget
+Force 3 rejections on 10 findings, verify activation
+Budget halts at configured threshold
+Without this, costs are unbounded
+Set 50K budget, verify halt at exactly 50K
+Priority Resolver is deterministic code, not LLM
+LLM-based priority is sycophantic
+Run resolver 10 times, verify identical scores
+Pre-LLM secrets redaction is active
+Raw secrets sent to LLM = compliance violation
+Scan 100 LLM payloads for secret patterns
+6. Phase 4: Advanced Features (Weeks 12-14)
+6.1 What You Are Building
+Phase 4 adds the features that transform the platform from a one-time audit tool into a continuous auditing system. Deliverables: P4-D01 Git Diff Ingestion (GitHub API integration for incremental audits, 10-file diff ingested in under 30 seconds), P4-D02 Multi-Repository Support (repository groups with dependency tracking, shared lib change triggers consuming repo re-audit within 5 minutes), P4-D03 Visual QA Enhancement (staged environment API testing, screenshot comparison, admin-elevated testing via Cloudflare Browser Run), P4-D04 Continuous Audit Lifecycle (re-analysis on content_hash change, recurrence counting, auto-close resolved findings, regression flagging), and P4-D05 Cross-Agent Knowledge (knowledge ledger queries, finding correlation, automatic severity escalation).
+6.2 Video Coding Session Scripts
+Session 15: Git Diff Ingestion Worker
+CONTEXT: Currently the system only supports full repository snapshots. We need a Git Diff Worker that integrates with the GitHub API to fetch only changed files between the last analyzed commit SHA and the current HEAD. The audit_sessions table needs a last_commit_sha column. The POST /api/v1/audits endpoint should accept an optional since_commit parameter. Only changed files are re-chunked. Unchanged files retain their existing chunks and findings.
+PROMPT: Create src/workers/git-diff-worker.ts implementing incremental repository ingestion via GitHub API. Accept a GitHub repo URL and optional since_commit SHA. List changed files between since_commit and HEAD. For changed files: fetch content, compare content_hash, re-chunk and re-store if hash differs. Preserve unchanged files. Add last_commit_sha to audit_sessions. Return summary of changed/unchanged/skipped files.
+Session 16: Continuous Audit Lifecycle Workflow
+CONTEXT: Continuous Audit Lifecycle as a Cloudflare Workflow running every hour. Monitors for file changes via content_hash comparison, triggers re-analysis of changed files, recalculates Production Readiness Score. When re-analysis produces findings: same finding = increment recurrence_count, resolved finding = auto-close task, new finding = new task with regression flag. Score formula: (verified_resolved / total_critical_and_high) x 100. Score must update within 10 seconds of any finding status change.
+PROMPT: Create src/workers/continuous-audit.ts as a Cloudflare Workflow. Implement: (1) Hourly scheduled check for changed files via content_hash. (2) Trigger re-analysis of changed files. (3) Diff new findings against existing. (4) Recalculate Production Readiness Score. (5) Emit score_updated WebSocket events. (6) Store score history for trend tracking.
+7. Phase 5: Production Hardening (Weeks 15-16)
+7.1 What You Are Building
+Phase 5 is the final polish before production deployment. Deliverables: P5-D01 Performance Optimization (P95 API latency under 200ms), P5-D02 Load Testing (10 concurrent tenants, 100 concurrent WebSocket connections, 1 hour zero errors), P5-D03 Security Audit (pen test auth layer, verify tenant isolation, zero critical/high findings), P5-D04 API Documentation (OpenAPI spec, endpoint docs, code examples), and P5-D05 Onboarding Wizard (step-by-step tenant setup, first audit walkthrough). This phase is about proving the existing system works under production conditions.
+7.2 Video Coding Session Scripts
+Session 17: Performance Optimization
+PROMPT: Implement performance optimizations: (1) Caching layer in src/lib/cache.ts for hot data. (2) D1 query optimization with composite indexes. (3) Efficient WebSocket fan-out for 100+ connections. (4) Response time logging. (5) Batched evidence verification R2 reads.
+Session 18: Load Testing Suite
+PROMPT: Create src/tests/load-test.ts simulating: 10 concurrent tenants, 100 WebSocket connections, sustained 1-hour load. Measure API P50/P95/P99 latency, WebSocket event delivery latency, D1 query times, Worker memory usage, D1 database size. Generate summary report.
+8. Battle-Hardened AI Taming Playbook
+This chapter distills every anti-hallucination technique into a single reference that applies regardless of which phase you are building. These are not theoretical suggestions; they are hard-won lessons from building multi-agent systems with AI coding agents. Each technique addresses a specific failure mode that I have observed repeatedly when building systems like AuditEngine.
+8.1 The Specify-Confirm-Build Protocol
+This is the single most effective technique for preventing hallucination when building with AI agents. The protocol has three steps that must be followed in order for every non-trivial component.
+Step 1 - Specify: Paste the relevant section of your AuditEngine documentation into the agent's context. Not a summary, not a paraphrase, but the actual specification text. If the specification is long, paste the most relevant subsection.
+Step 2 - Confirm: Before asking the agent to write any code, ask it to describe what it is going to build, specifically listing the key constraints. The agent's answer must match your specification.
+Step 3 - Build: Only after confirmation do you ask the agent to write the code. Read the generated code and verify every constraint from Step 2 is implemented.
+8.2 The Context Window Management Strategy
+AI agents have finite context windows. The AuditEngine documentation is approximately 15,000 words, which exceeds the effective context of most models when combined with generated code. The strategy: (1) Never load the entire documentation at once. (2) For each session, load only the sections directly relevant. (3) When a component spans multiple sections, load all relevant sections but tell the agent to focus on the intersection. (4) At the start of each session, tell the agent what it does NOT need to worry about.
+8.3 The Fabrication Detection Checklist
+After every session, run through this checklist to detect fabricated code.
+Pattern
+What to Check
+Why It Happens
+Invented Cloudflare APIs
+Search for any Cloudflare API call not in official docs
+Agent guesses at plausible-sounding APIs
+Wrong D1 constraint syntax
+Verify every CREATE TABLE against Cloudflare D1 supported syntax
+Agent uses full PostgreSQL syntax
+Missing UNIQUE constraints
+Verify claims table has composite PK on 4 columns
+Agent defaults to simple integer PKs
+Omitted budget checks
+Verify llmCall() checks run_budget.paused
+Agent writes the happy path only
+Wrong enum values
+Verify severity uses: critical, high, medium, low, info
+Agent may add 'warning' or 'error'
+Missing tenant_id in queries
+Search for every D1 query, verify WHERE tenant_id = ?
+Agent omits tenant isolation
+Wrong R2 key format
+Verify key matches {tenant_id}/{session_id}/{hash}/{index}
+Agent uses a simpler format
+Banned phrases list incomplete
+Compare against AuditEngine doc Section 5
+Agent generates partial list
+Agent doing another agent's job
+Coordinator never reads files, agents never spawn agents
+Agent does not respect role boundaries
+Evidence verification as LLM call
+Verify gate.ts uses substring matching
+Agent thinks LLM evaluation is more sophisticated
+8.4 The Hallucination Trap: Sycophancy
+The most insidious form of hallucination is not fabrication but sycophancy: the agent agrees with your approach even when it has a better alternative, or worse, it agrees with an approach that contains a flaw it could have caught. The countermeasure: when you sense the agent is agreeing too quickly, play devil's advocate. Ask: 'What could go wrong with this approach?' or 'What would happen if we skipped this component?' If the agent cannot identify the risk, it has not understood the specification deeply enough.
+8.5 The Incremental Verification Protocol
+Every deliverable in every phase has exit criteria defined in your Implementation Plan. After each session, verify those exit criteria before moving on. The protocol: (1) Run the exact exit criteria test. (2) If the test fails, fix immediately. (3) Once the test passes, commit with a message referencing the deliverable ID. (4) Before starting the next deliverable, verify the previous one still passes. This is time-consuming but it is the only way to build a system of this complexity with AI agents without accumulating undetected errors.
+9. Anti-Hallucination Arsenal
+This chapter provides a consolidated reference of every anti-hallucination technique applicable to building AuditEngine, organized by the layer of the system they protect. Your architecture already defines three enforcement layers for the runtime platform; this chapter adds a fourth layer: the development process itself.
+9.1 Layer 1: Constitutional (Development Process)
+Rule
+Description
+Violation Consequence
+Read Before Write
+Never ask the agent to generate code without loading the specification
+Agent invents plausible but incorrect implementations
+Confirm Before Build
+Ask the agent to describe its approach before generating code
+Misunderstandings compound across sessions
+Verify Before Commit
+Run exit criteria tests before committing
+Undetected bugs accumulate
+One Deliverable Per Session
+Each session produces exactly one deliverable
+Agent loses focus, produces shallow work
+Specify Before Extend
+Load spec before asking agent to modify code
+Agent modifies without understanding constraints
+Test Before Trust
+Never trust agent's claim that code works; run the test
+Agent reports success based on code reading
+9.2 Layer 2: Verification Gates (Code Review)
+Gate
+What It Checks
+How to Enforce
+Schema Compliance
+Every D1 table matches documented schema exactly
+Diff generated schema.sql against AuditEngine doc Section 10.1
+Import Integrity
+Every import references a file that exists
+Run npx tsc --noEmit
+API Contract
+Every function signature matches documented interface
+Compare generated interfaces against AuditEngine doc Section 6
+Routing Correctness
+llmCall routes to correct model per task type
+Unit test with mocked AI Gateway
+Budget Enforcement
+Every llmCall checks budget before proceeding
+Search codebase for llmCall, verify budget check
+Tenant Isolation
+Every D1 query includes WHERE tenant_id = ?
+Search for .prepare() or .exec() calls
+Banned Phrase Coverage
+Banned phrases list is complete and scanned
+Compare array against AuditEngine doc Section 5
+9.3 Layer 3: Behavioral Tuning (Prompt Engineering)
+Technique
+When to Use
+Example
+Negative Constraints
+Agent keeps making the same mistake
+'Do NOT use fetch() to call the model. Only use llmCall().'
+Concrete Examples
+Agent's output is too generic
+'The Security Agent constitution must include: execution trace requirements (7 steps)...'
+Scope Limitation
+Agent tries to do too much
+'We are ONLY building the Verification Gate.'
+Explicit Rejection
+Agent agrees too easily
+'What are the risks of LLM-based evidence verification?'
+Step-by-Step Decomposition
+Component is complex
+Break Salvation Protocol into 5 explicit steps.
+10. Video Coding Master Protocols
+This final chapter provides the overarching protocols for recording compelling, educational video coding sessions. These are not scripts for specific components but the meta-techniques that make the entire video series watchable and credible.
+10.1 The Session Structure That Works
+Segment
+Duration
+What You Do
+What Audience Sees
+1. Context Loading
+3-5 min
+Paste specification section, read constraints aloud
+You loading the contract before starting work
+2. Confirm Understanding
+2-3 min
+Ask agent to describe approach, verify against spec
+You catching a misunderstanding before it becomes a bug
+3. Generate Code
+8-15 min
+Agent writes code, you review in real-time
+AI generating production code with human oversight
+4. Review and Fix
+5-10 min
+Run exit criteria, fix failures
+You being a rigorous engineer, not passive accepter
+5. Commit and Close
+2-3 min
+Commit with deliverable ID reference
+Clean session boundary
+10.2 What Makes Good Video Coding Content
+The most compelling moments in video coding are not when the agent produces correct code on the first try, but when the agent produces subtly wrong code and you catch it. This demonstrates that AI agents require skillful direction and that the human developer's role has shifted from writing code to reviewing, directing, and verifying code.
+10.3 Common Mistakes to Avoid on Camera
+First, never let the agent generate more than 200 lines of code without reviewing. Large code blocks are where hallucinations hide. Second, never accept an agent's explanation for why a test failure is acceptable. Third, never skip the confirmation step even when you are confident. Fourth, never carry over context from a failed session without explicitly clearing it.
+10.4 The Anti-Hallucination Demo Script
+Prepare a test repository with an obvious security vulnerability (e.g., SQL injection in an Express route). Run the audit with the Verification Gate enabled. Show the audience: (1) The evidence_quote is a verbatim excerpt from the actual file. (2) The evidence verification pipeline confirms the quote exists in R2. (3) The severity is calibrated correctly. Then temporarily disable the Verification Gate and run the audit again. Show that the agent now produces findings with fabricated evidence quotes that sound plausible but do not exist in the actual code. This single demonstration proves why the anti-hallucination architecture is necessary.

@@ -1,4 +1,4 @@
-import type { TaskType, Model, Provider } from '../types/index'
+import type { TaskType, Model, Provider, AgentConfig } from '../types/index'
 
 export interface RouteDecision {
   model:     Model
@@ -19,8 +19,26 @@ const TASK_ROUTE_MAP: Record<TaskType, RouteDecision> = {
   conflict_resolution: { model: 'kimi-k3',    provider: 'kimi',    maxTokens: 32_000,  taskType: 'conflict_resolution' },
 }
 
-export function routeToModel(taskType: TaskType, fileLineCount?: number): RouteDecision {
-  const decision = TASK_ROUTE_MAP[taskType] ?? { model: 'kimi-k2.6', provider: 'kimi', maxTokens: 16_000, taskType }
+const VALID_MODELS = new Set<Model>(['kimi-k3', 'kimi-k2.6', 'minimax-m3'])
+
+export function routeToModel(
+  taskType: TaskType,
+  agentConfig?: Partial<AgentConfig>,
+  fileLineCount?: number
+): RouteDecision {
+  const decision = { ...(TASK_ROUTE_MAP[taskType] ?? { model: 'kimi-k2.6', provider: 'kimi', maxTokens: 16_000, taskType }) }
+
+  // Agent config can override model and max_tokens if the model is permitted
+  const configModel = agentConfig?.model_name as Model | undefined
+  if (configModel && VALID_MODELS.has(configModel)) {
+    const provider: Provider = configModel.startsWith('kimi') ? 'kimi' : 'minimax'
+    decision.model = configModel
+    decision.provider = provider
+  }
+
+  if (agentConfig?.max_tokens) {
+    decision.maxTokens = agentConfig.max_tokens
+  }
 
   // Override: large files for deep_audit keep max tokens
   if (taskType === 'deep_audit' && typeof fileLineCount === 'number' && fileLineCount > 400) {

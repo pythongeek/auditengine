@@ -1,11 +1,13 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { Env, AgentType, AuditPhase, DashboardEvent } from '../types/index'
-import { runPriorityResolver } from './priority-resolver'
+import { DOMAIN_MAP, AgentDurableObject } from '../agents/base-agent'
 import { verifyTask, recalcProductionScore } from './verification'
 import { runVisualQA } from './visual-qa'
+import { ensureDefaultAgentConfig, ALL_AGENT_TYPES } from '../lib/agent-config'
 
 export class CoordinatorDurableObject extends DurableObject<Env> {
   private auditRunId: string = ''
+  private tenantId: string = ''
   private lastAlertState = { alert_50_sent: 0, alert_80_sent: 0, alert_95_sent: 0 }
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -17,11 +19,33 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
       return new Response('Method not allowed', { status: 405 })
     }
 
-    const body = await request.json() as { audit_run_id: string }
+    const body = await request.json() as { audit_run_id: string; tenant_id?: string }
     this.auditRunId = body.audit_run_id
+    this.tenantId = body.tenant_id ?? ''
 
-    await this.ctx.storage.setAlarm(Date.now() + 60_000)
+    await this.ensureAuditSession()
+    await this.ctx.storage.setAlarm(Date.now() + 30_000)
     return new Response('Coordinator started', { status: 200 })
+  }
+
+  private async ensureAuditSession(): Promise<void> {
+    const env = this.env as Env
+    const db = env.DB
+
+    await db
+      .prepare(`
+        INSERT OR IGNORE INTO audit_sessions (
+          id, tenant_id, status, total_files, files_analyzed,
+          findings_count, readiness_score, created_at
+        ) VALUES (?, ?, 'pending', 0, 0, 0, 0.0, unixepoch())
+      `)
+      .bind(this.auditRunId, this.tenantId)
+      .run()
+
+    const agentTypes: AgentType[] = ALL_AGENT_TYPES
+    for (const agentType of agentTypes) {
+      await ensureDefaultAgentConfig(db, this.tenantId, agentType)
+    }
   }
 
   async alarm(): Promise<void> {
@@ -79,13 +103,19 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
 
     // Transition 1: boot → phase-1
     if (currentPhase === 'boot') {
-      const manifest = await db
-        .prepare('SELECT 1 FROM repo_manifest WHERE audit_run_id = ? LIMIT 1')
-        .bind(this.auditRunId)
+      const files = await db
+        .prepare('SELECT 1 FROM files WHERE audit_run_id = ? AND tenant_id = ? LIMIT 1')
+        .bind(this.auditRunId, this.tenantId)
         .first()
-      if (manifest) {
-        await spawnAgent('architecture', 1, this.auditRunId, env)
-        await spawnAgent('database', 1, this.auditRunId, env)
+      if (files) {
+        await db
+          .prepare("UPDATE audit_sessions SET status = 'running', started_at = unixepoch() WHERE id = ?")
+          .bind(this.auditRunId)
+          .run()
+        const phase1Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db, ['architecture', 'database'])
+        for (const agentType of phase1Agents) {
+          await spawnAgent(agentType, 1, this.tenantId, this.auditRunId, env)
+        }
         await db
           .prepare("UPDATE run_budget SET phase = 'phase-1' WHERE audit_run_id = ?")
           .bind(this.auditRunId)
@@ -97,11 +127,14 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
     else if (currentPhase === 'phase-1') {
       const allDone = await allAgentsDoneInPhase(this.auditRunId, 1, db)
       if (allDone) {
-        await spawnAgent('security', 2, this.auditRunId, env)
-        await spawnAgent('api', 2, this.auditRunId, env)
-        await spawnAgent('frontend', 2, this.auditRunId, env)
-        await spawnAgent('devops', 2, this.auditRunId, env)
-        await spawnVisualQA(this.auditRunId, env)
+        const phase2Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db, ['security', 'api', 'frontend', 'devops'])
+        for (const agentType of phase2Agents) {
+          await spawnAgent(agentType, 2, this.tenantId, this.auditRunId, env)
+        }
+        const visualQaRelevant = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db, ['visual_qa'])
+        if (visualQaRelevant.length > 0) {
+          await spawnVisualQA(this.auditRunId, env)
+        }
         await db
           .prepare("UPDATE run_budget SET phase = 'phase-2' WHERE audit_run_id = ?")
           .bind(this.auditRunId)
@@ -113,9 +146,14 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
     else if (currentPhase === 'phase-2') {
       const allDone = await allAgentsDoneInPhase(this.auditRunId, 2, db)
       if (allDone) {
-        await runPriorityResolver(this.auditRunId, env)
-        await spawnAgent('documentation', 3, this.auditRunId, env)
-        await spawnAgent('performance', 3, this.auditRunId, env)
+        await env.PRIORITY_RESOLVER_WORKFLOW.create({
+          id: `priority-resolver-${this.auditRunId}`,
+          params: { auditRunId: this.auditRunId },
+        })
+        const phase3Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db, ['documentation', 'performance'])
+        for (const agentType of phase3Agents) {
+          await spawnAgent(agentType, 3, this.tenantId, this.auditRunId, env)
+        }
         await db
           .prepare("UPDATE run_budget SET phase = 'phase-3' WHERE audit_run_id = ?")
           .bind(this.auditRunId)
@@ -171,6 +209,10 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
 
       if (!unresolved) {
         await recalcProductionScore(this.auditRunId, db)
+        const scoreRow = await db
+          .prepare('SELECT production_score FROM run_budget WHERE audit_run_id = ?')
+          .bind(this.auditRunId)
+          .first<{ production_score: number }>()
         this.broadcast({
           type: 'audit_complete',
           audit_run_id: this.auditRunId,
@@ -181,10 +223,21 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
           .prepare("UPDATE run_budget SET phase = 'complete' WHERE audit_run_id = ?")
           .bind(this.auditRunId)
           .run()
+        await db
+          .prepare(`
+            UPDATE audit_sessions
+            SET status = 'complete',
+                completed_at = unixepoch(),
+                readiness_score = ?,
+                findings_count = (SELECT COUNT(*) FROM findings WHERE audit_run_id = ?)
+            WHERE id = ?
+          `)
+          .bind(scoreRow?.production_score ?? 0, this.auditRunId, this.auditRunId)
+          .run()
       }
     }
 
-    await this.ctx.storage.setAlarm(Date.now() + 60_000)
+    await this.ctx.storage.setAlarm(Date.now() + 30_000)
   }
 
   private broadcast(event: DashboardEvent): void {
@@ -200,27 +253,96 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
   }
 }
 
-async function spawnAgent(
+export function agentNamespace(agentType: AgentType, env: Env): DurableObjectNamespace {
+  switch (agentType) {
+    case 'security': return env.SECURITY_AGENT_DO
+    case 'api': return env.API_AGENT_DO
+    case 'frontend': return env.FRONTEND_AGENT_DO
+    case 'database': return env.DATABASE_AGENT_DO
+    case 'architecture': return env.ARCHITECTURE_AGENT_DO
+    case 'testing': return env.TESTING_AGENT_DO
+    case 'performance': return env.PERFORMANCE_AGENT_DO
+    case 'devops': return env.DEVOPS_AGENT_DO
+    case 'documentation': return env.DOCUMENTATION_AGENT_DO
+    case 'visual_qa': return env.VISUAL_QA_AGENT_DO
+    case 'backend': return env.BACKEND_AGENT_DO
+    case 'dependency': return env.DEPENDENCY_AGENT_DO
+    case 'a11y': return env.A11Y_AGENT_DO
+    case 'i18n': return env.I18N_AGENT_DO
+    case 'logging': return env.LOGGING_AGENT_DO
+    case 'code_quality': return env.CODE_QUALITY_AGENT_DO
+    case 'error_handling': return env.ERROR_HANDLING_AGENT_DO
+    case 'configuration': return env.CONFIGURATION_AGENT_DO
+    case 'refactoring': return env.REFACTORING_AGENT_DO
+  }
+}
+
+export async function getRelevantAgentsForPhase(
+  auditRunId: string,
+  tenantId: string,
+  db: D1Database,
+  candidateTypes: AgentType[]
+): Promise<AgentType[]> {
+  const rows = await db
+    .prepare('SELECT DISTINCT domain_tag FROM files WHERE audit_run_id = ? AND tenant_id = ?')
+    .bind(auditRunId, tenantId)
+    .all<{ domain_tag: string | null }>()
+
+  const tags = new Set((rows.results ?? []).map(r => r.domain_tag).filter((t): t is string => t !== null && t !== ''))
+  return candidateTypes.filter(agentType => {
+    const domain = DOMAIN_MAP[agentType]
+    return domain === 'all' || tags.has(domain)
+  })
+}
+
+async function getAssignedFiles(
+  auditRunId: string,
+  tenantId: string,
+  db: D1Database,
+  agentType: AgentType
+): Promise<string[]> {
+  const domain = DOMAIN_MAP[agentType]
+  if (domain === 'all') {
+    const rows = await db
+      .prepare('SELECT path FROM files WHERE audit_run_id = ? AND tenant_id = ? ORDER BY path')
+      .bind(auditRunId, tenantId)
+      .all<{ path: string }>()
+    return rows.results?.map(r => r.path) ?? []
+  }
+
+  const rows = await db
+    .prepare('SELECT path FROM files WHERE audit_run_id = ? AND tenant_id = ? AND domain_tag = ? ORDER BY path')
+    .bind(auditRunId, tenantId, domain)
+    .all<{ path: string }>()
+  return rows.results?.map(r => r.path) ?? []
+}
+
+export async function spawnAgent(
   agentType: AgentType,
   phase: number,
+  tenantId: string,
   auditRunId: string,
   env: Env
 ): Promise<void> {
   const agentId = `${agentType}-${auditRunId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  const domain = DOMAIN_MAP[agentType]
+  const assignedFiles = await getAssignedFiles(auditRunId, tenantId, env.DB, agentType)
 
   await env.DB
     .prepare(`
-      INSERT OR IGNORE INTO agent_registry (agent_id, agent_type, audit_run_id, status, phase)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO agent_registry (
+        agent_id, tenant_id, agent_type, audit_run_id, status, phase, domain, assigned_files
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `)
-    .bind(agentId, agentType, auditRunId, 'boot', phase)
+    .bind(agentId, tenantId, agentType, auditRunId, 'idle', phase, domain, JSON.stringify(assignedFiles))
     .run()
 
-  const id = env.AGENT_DO.idFromName(agentId)
-  const stub = env.AGENT_DO.get(id)
+  const ns = agentNamespace(agentType, env)
+  const id = ns.idFromName(agentId)
+  const stub = ns.get(id)
   await stub.fetch(new Request('https://agent/boot', {
     method: 'POST',
-    body: JSON.stringify({ agentId, agentType, auditRunId }),
+    body: JSON.stringify({ agentId, tenantId, agentType, auditRunId }),
     headers: { 'Content-Type': 'application/json' },
   }))
 }
@@ -231,7 +353,7 @@ async function allAgentsDoneInPhase(auditRunId: string, phase: number, db: D1Dat
     .bind(auditRunId, phase)
     .first<{ count: number }>()
 
-  if (!total || total.count === 0) return false
+  if (!total || total.count === 0) return true
 
   const done = await db
     .prepare(`

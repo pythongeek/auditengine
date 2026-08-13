@@ -1,9 +1,9 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { Env, AgentPersistentState, AgentType, GateContext,
-  DashboardEvent, Message } from '../types/index'
+  DashboardEvent, Message, ValidatedFinding, CrossAgentFinding } from '../types/index'
 import { llmCall } from '../lib/llm-gateway'
 import { runGate } from '../lib/gate'
-import { runSalvationProtocol } from '../workers/salvation'
+import { getChunk } from '../lib/r2-storage'
 
 export const DOMAIN_MAP: Record<AgentType, string> = {
   security:      "backend",
@@ -15,7 +15,16 @@ export const DOMAIN_MAP: Record<AgentType, string> = {
   performance:   "all",
   devops:        "config",
   documentation: "docs",
-  visual_qa:     "all"
+  visual_qa:     "all",
+  backend:       "backend",
+  dependency:    "all",
+  a11y:          "frontend",
+  i18n:          "all",
+  logging:       "all",
+  code_quality:  "all",
+  error_handling:"all",
+  configuration: "config",
+  refactoring:   "all",
 }
 
 function constitutionFileName(agentType: AgentType): string {
@@ -54,6 +63,14 @@ export async function tick(
           `)
           .bind(state.auditRunId, state.agentId, 'missing_constitution', `Missing ${constitutionKey}`, constitutionKey)
           .run()
+        await writeAuditLog(
+          env.DB,
+          state.tenantId ?? '',
+          state.auditRunId,
+          state.agentId,
+          'error',
+          { error_type: 'missing_constitution', path: constitutionKey }
+        )
       } else {
         constitutionText = await constitutionObj.text()
       }
@@ -62,10 +79,10 @@ export async function tick(
 
       const domain = DOMAIN_MAP[state.agentType]
       const rows = await env.DB
-        .prepare('SELECT file_path FROM repo_manifest WHERE audit_run_id = ? AND domain = ?')
-        .bind(state.auditRunId, domain)
-        .all<{ file_path: string }>()
-      const fileQueue = rows.results?.map(r => r.file_path) ?? []
+        .prepare('SELECT path FROM files WHERE tenant_id = ? AND audit_run_id = ? AND domain_tag = ?')
+        .bind(state.tenantId ?? '', state.auditRunId, domain)
+        .all<{ path: string }>()
+      const fileQueue = rows.results?.map(r => r.path) ?? []
 
       return {
         ...state,
@@ -101,11 +118,24 @@ export async function tick(
         return { ...state, state: 'claiming', queueCursor: state.queueCursor + 1 }
       }
 
-      const chunkKey = `chunks/${state.auditRunId}/${state.currentFile}/0`
-      const chunkObj = await env.R2.get(chunkKey)
+      const chunkObj = await getChunk(
+        state.tenantId ?? '',
+        state.auditRunId,
+        state.currentFile,
+        0,
+        env.R2
+      )
 
       if (chunkObj === null) {
         await logMissingFile(state.currentFile, state.agentId, env.DB)
+        await writeAuditLog(
+          env.DB,
+          state.tenantId ?? '',
+          state.auditRunId,
+          state.agentId,
+          'error',
+          { error_type: 'missing_file_chunk', file: state.currentFile }
+        )
         return { ...state, state: 'claiming', queueCursor: state.queueCursor + 1 }
       }
 
@@ -114,7 +144,7 @@ export async function tick(
     }
 
     case 'cross_reading': {
-      const rows = await env.DB
+      const findingsRows = await env.DB
         .prepare(`
           SELECT finding_id, severity, category, file, description, agent_id
           FROM findings
@@ -125,17 +155,23 @@ export async function tick(
         .bind(state.auditRunId, state.agentId)
         .all<{ finding_id: string; severity: string; category: string; file: string; description: string; agent_id: string }>()
 
+      const knowledge = await readSharedMemory(state, env)
+
+      const fromFindings = findingsRows.results?.map(r => ({
+        finding_id: r.finding_id,
+        severity: r.severity as AgentPersistentState['crossAgentContext'][number]['severity'],
+        category: r.category,
+        file: r.file,
+        description: r.description,
+        agent_id: r.agent_id,
+      })) ?? []
+
+      const merged = mergeCrossAgentContext(fromFindings, knowledge)
+
       return {
         ...state,
         state: 'analyzing',
-        crossAgentContext: rows.results?.map(r => ({
-          finding_id: r.finding_id,
-          severity: r.severity as AgentPersistentState['crossAgentContext'][number]['severity'],
-          category: r.category,
-          file: r.file,
-          description: r.description,
-          agent_id: r.agent_id,
-        })) ?? [],
+        crossAgentContext: merged,
       }
     }
 
@@ -158,22 +194,46 @@ export async function tick(
         return { ...state, state: 'looping' }
       }
 
-      const ctx = buildGateContext(state)
+      const ctx = buildGateContext(state, env)
       const gateResult = await runGate(state.lastModelOutput, ctx, env.DB)
 
       if (gateResult.passed) {
         return { ...state, state: 'writing', validatedFindings: gateResult.findings }
       }
 
+      await writeAuditLog(
+        env.DB,
+        state.tenantId ?? '',
+        state.auditRunId,
+        state.agentId,
+        'gate_rejected',
+        { reason: gateResult.reason, file: state.currentFile }
+      )
+
       const newFailCount = state.gateFailCount + 1
+      const newReactIterations = state.reactIterations + 1
+
       if (newFailCount >= 3) {
-        return { ...state, state: 'salvation', gateFailCount: newFailCount }
+        return { ...state, state: 'salvation', gateFailCount: newFailCount, reactIterations: newReactIterations }
+      }
+
+      if (newReactIterations >= 5) {
+        await writeAuditLog(
+          env.DB,
+          state.tenantId ?? '',
+          state.auditRunId,
+          state.agentId,
+          'react_bound_exceeded',
+          { file: state.currentFile, iterations: newReactIterations }
+        )
+        return { ...state, state: 'looping', queueCursor: state.queueCursor + 1, reactIterations: newReactIterations }
       }
 
       return {
         ...state,
         state: 'analyzing',
         gateFailCount: newFailCount,
+        reactIterations: newReactIterations,
         gateRejectionReason: gateResult.reason,
         gateRejectionHistory: [...state.gateRejectionHistory, gateResult.reason ?? ''],
       }
@@ -181,44 +241,69 @@ export async function tick(
 
     case 'writing': {
       for (const finding of state.validatedFindings) {
+        const decision = await deduplicateFinding(finding, state, env)
+        if (decision.action === 'skip') {
+          await writeAuditLog(
+            env.DB,
+            state.tenantId ?? '',
+            state.auditRunId,
+            state.agentId,
+            'finding_duplicate_skipped',
+            { finding_id: finding.finding_id, file: finding.file, category: finding.category }
+          )
+          continue
+        }
+
+        const finalFinding = decision.finding
         await env.DB
           .prepare(`
             INSERT INTO findings (
               finding_id, audit_run_id, agent_id, agent_type, severity, category,
               file, line_range_start, line_range_end, evidence_quote, description,
-              impact, verified_by, source, status, recurrence_count, ts, verified_at, screenshot_id
+              impact, verified_by, source, status, recurrence_count, is_regression, ts, verified_at, screenshot_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `)
           .bind(
-            finding.finding_id,
-            finding.audit_run_id,
-            finding.agent_id,
-            finding.agent_type,
-            finding.severity,
-            finding.category,
-            finding.file,
-            finding.line_range?.[0] ?? null,
-            finding.line_range?.[1] ?? null,
-            finding.evidence_quote,
-            finding.description,
-            finding.impact,
-            JSON.stringify(finding.verified_by),
-            finding.source,
-            finding.status,
-            finding.recurrence_count,
-            finding.ts,
-            finding.verified_at,
-            finding.screenshot_id
+            finalFinding.finding_id,
+            finalFinding.audit_run_id,
+            finalFinding.agent_id,
+            finalFinding.agent_type,
+            finalFinding.severity,
+            finalFinding.category,
+            finalFinding.file,
+            finalFinding.line_range?.[0] ?? null,
+            finalFinding.line_range?.[1] ?? null,
+            finalFinding.evidence_quote,
+            finalFinding.description,
+            finalFinding.impact,
+            JSON.stringify(finalFinding.verified_by),
+            finalFinding.source,
+            finalFinding.status,
+            finalFinding.recurrence_count,
+            finalFinding.is_regression ? 1 : 0,
+            finalFinding.ts,
+            finalFinding.verified_at,
+            finalFinding.screenshot_id
           )
           .run()
+
+        await writeSharedMemory(finalFinding, state, env)
 
         broadcast({
           type: 'finding_created',
           audit_run_id: state.auditRunId,
           agent_id: state.agentId,
-          payload: { finding },
+          payload: { finding: finalFinding },
           ts: Date.now(),
         })
+        await writeAuditLog(
+          env.DB,
+          state.tenantId ?? '',
+          state.auditRunId,
+          state.agentId,
+          'finding_written',
+          { finding_id: finalFinding.finding_id, file: finalFinding.file, severity: finalFinding.severity, is_regression: finalFinding.is_regression }
+        )
       }
 
       return { ...state, state: 'looping', queueCursor: state.queueCursor + 1 }
@@ -235,6 +320,7 @@ export async function tick(
         gateRejectionReason: null,
         gateRejectionHistory: [],
         gateFailCount: 0,
+        reactIterations: 0,
         validatedFindings: [],
       }
     }
@@ -266,7 +352,10 @@ export async function tick(
     }
 
     case 'salvation': {
-      await runSalvationProtocol(state, env)
+      await env.SALVATION_WORKFLOW.create({
+        id: `salvation-${state.agentId}-${Date.now()}`,
+        params: state,
+      })
       return { ...state, state: 'claiming', queueCursor: state.queueCursor + 1 }
     }
 
@@ -282,6 +371,23 @@ export async function persistCursor(agentId: string, cursor: number, db: D1Datab
     .run()
 }
 
+export async function writeAuditLog(
+  db: D1Database,
+  tenantId: string,
+  auditRunId: string,
+  agentId: string | null,
+  eventType: string,
+  eventData: Record<string, unknown>
+): Promise<void> {
+  await db
+    .prepare(`
+      INSERT INTO audit_logs (tenant_id, audit_run_id, agent_id, event_type, event_data)
+      VALUES (?, ?, ?, ?, ?)
+    `)
+    .bind(tenantId, auditRunId, agentId, eventType, JSON.stringify(eventData))
+    .run()
+}
+
 export async function logMissingFile(filePath: string, agentId: string, db: D1Database): Promise<void> {
   // audit_run_id is unknown here; use empty string to satisfy schema and log agent context
   await db
@@ -293,13 +399,152 @@ export async function logMissingFile(filePath: string, agentId: string, db: D1Da
     .run()
 }
 
-export function buildGateContext(state: AgentPersistentState): GateContext {
+export async function readSharedMemory(
+  state: AgentPersistentState,
+  env: Env
+): Promise<CrossAgentFinding[]> {
+  if (!state.currentFile || !env.SHARED_MEMORY_DO) return []
+
+  const id = env.SHARED_MEMORY_DO.idFromName(`shared-${state.auditRunId}`)
+  const stub = env.SHARED_MEMORY_DO.get(id)
+
+  try {
+    const response = await stub.fetch(new Request('https://shared-memory/read', {
+      method: 'POST',
+      body: JSON.stringify({
+        tenant_id: state.tenantId ?? '',
+        audit_run_id: state.auditRunId,
+        file_path: state.currentFile,
+        agent_id: state.agentId,
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    if (!response.ok) return []
+    const data = await response.json() as { entries: Array<{
+      agent_id: string
+      agent_type: string
+      file_path: string
+      finding_id: string | null
+      content: string
+    }> }
+
+    return (data.entries ?? []).map(entry => {
+      const content = JSON.parse(entry.content) as {
+        severity: string
+        category: string
+        description: string
+      }
+      return {
+        finding_id: entry.finding_id ?? '',
+        severity: content.severity as CrossAgentFinding['severity'],
+        category: content.category,
+        file: entry.file_path,
+        description: content.description,
+        agent_id: entry.agent_id,
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+export async function writeSharedMemory(
+  finding: ValidatedFinding,
+  state: AgentPersistentState,
+  env: Env
+): Promise<void> {
+  if (!env.SHARED_MEMORY_DO) return
+
+  const id = env.SHARED_MEMORY_DO.idFromName(`shared-${state.auditRunId}`)
+  const stub = env.SHARED_MEMORY_DO.get(id)
+
+  try {
+    await stub.fetch(new Request('https://shared-memory/write', {
+      method: 'POST',
+      body: JSON.stringify({
+        tenant_id: state.tenantId ?? '',
+        audit_run_id: state.auditRunId,
+        agent_id: state.agentId,
+        agent_type: state.agentType,
+        file_path: finding.file,
+        finding_id: finding.finding_id,
+        knowledge_type: 'finding',
+        content: JSON.stringify({
+          severity: finding.severity,
+          category: finding.category,
+          description: finding.description,
+        }),
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    }))
+  } catch {
+    // Shared memory writes are best-effort; failures should not stop the agent.
+  }
+}
+
+export async function deduplicateFinding(
+  finding: ValidatedFinding,
+  state: AgentPersistentState,
+  env: Env
+): Promise<{ action: 'insert' | 'skip'; finding: ValidatedFinding }> {
+  const rows = await env.DB
+    .prepare(`
+      SELECT finding_id, status, recurrence_count
+      FROM findings
+      WHERE tenant_id = ? AND audit_run_id = ? AND file = ? AND category = ? AND severity = ?
+    `)
+    .bind(state.tenantId ?? '', state.auditRunId, finding.file, finding.category, finding.severity)
+    .all<{ finding_id: string; status: string; recurrence_count: number }>()
+
+  const existing = rows.results ?? []
+  if (existing.length === 0) {
+    return { action: 'insert', finding: { ...finding, recurrence_count: 0, is_regression: false } }
+  }
+
+  const resolved = existing.find(r => ['resolved', 'closed', 'superseded'].includes(r.status))
+  if (resolved) {
+    return {
+      action: 'insert',
+      finding: {
+        ...finding,
+        recurrence_count: resolved.recurrence_count + 1,
+        is_regression: true,
+      },
+    }
+  }
+
+  // Duplicate open finding — keep the original and skip this one.
+  return { action: 'skip', finding }
+}
+
+export function mergeCrossAgentContext(
+  fromFindings: CrossAgentFinding[],
+  fromSharedMemory: CrossAgentFinding[]
+): CrossAgentFinding[] {
+  const seen = new Set<string>()
+  const merged: CrossAgentFinding[] = []
+
+  for (const item of [...fromFindings, ...fromSharedMemory]) {
+    const key = `${item.agent_id}:${item.finding_id}:${item.category}:${item.file}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      merged.push(item)
+    }
+  }
+
+  return merged.slice(0, 50)
+}
+
+export function buildGateContext(state: AgentPersistentState, env: Env): GateContext {
   return {
     agentId: state.agentId,
     agentType: state.agentType,
     auditRunId: state.auditRunId,
+    tenantId: state.tenantId,
     currentFile: state.currentFile!,
     currentFileContent: state.currentFileContent!,
+    r2: env.R2,
     claimLog: new Set(),
   }
 }
@@ -366,10 +611,12 @@ Each finding must be an object with exactly these 9 fields:
 - "category": one of the category strings from your constitution
 - "file": the file path shown above
 - "line_range": either [startLine, endLine] or null
-- "evidence_quote": an exact substring from the file content (minimum 8 characters)
+- "evidence_quote": an exact substring from the file content (minimum 10 characters; critical/high findings require at least 50 characters)
 - "description": what the issue is and why it matters
-- "impact": the concrete negative consequence; required for critical and high severity (minimum 20 characters)
+- "impact": the concrete negative consequence; required for critical and high severity (minimum 30 characters)
 - "verified_by": an array of strings describing verification steps taken
+
+Do NOT include any fields other than these 9. Extra fields cause automatic rejection.
 `
 
   const traceBlock = `
@@ -414,13 +661,15 @@ export class AgentDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const body = await request.json() as {
       agentId: string
+      tenantId?: string
       agentType: AgentType
       auditRunId: string
     }
-    const { agentId, agentType, auditRunId } = body
+    const { agentId, tenantId, agentType, auditRunId } = body
 
     let state: AgentPersistentState = {
       agentId,
+      tenantId,
       agentType,
       auditRunId,
       state: 'boot',
@@ -429,6 +678,7 @@ export class AgentDurableObject extends DurableObject<Env> {
       currentFile: null,
       currentFileContent: null,
       gateFailCount: 0,
+      reactIterations: 0,
       currentFindingId: null,
       constitutionText: '',
       specText: '',
@@ -451,8 +701,20 @@ export class AgentDurableObject extends DurableObject<Env> {
       })
     }
 
+    let previousState = state.state
     while (state.state !== 'done' && state.state !== 'paused') {
       state = await tick(state, this.env, broadcast)
+      if (state.state !== previousState) {
+        await writeAuditLog(
+          this.env.DB,
+          tenantId ?? '',
+          auditRunId,
+          agentId,
+          'state_change',
+          { from: previousState, to: state.state }
+        )
+        previousState = state.state
+      }
     }
 
     return new Response(JSON.stringify({ status: state.state, agentId }), {

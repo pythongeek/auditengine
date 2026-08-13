@@ -1,1 +1,119 @@
-export const HOME_HTML = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n  <title>AuditEngine — Home</title>\n  <style>\n    :root {\n      --bg: #111;\n      --text: #e5e5e5;\n      --muted: #888;\n      --card: #1a1a1a;\n      --border: #333;\n      --accent: #3b82f6;\n      --green: #22c55e;\n    }\n    * { box-sizing: border-box; }\n    body {\n      margin: 0;\n      font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n      background: var(--bg);\n      color: var(--text);\n      line-height: 1.5;\n    }\n    nav {\n      padding: 1rem 1.5rem;\n      border-bottom: 1px solid var(--border);\n      display: flex;\n      justify-content: space-between;\n      align-items: center;\n    }\n    nav .brand { font-weight: 700; font-size: 1.2rem; }\n    nav a { color: var(--text); text-decoration: none; margin-left: 1rem; }\n    nav a:hover { color: var(--accent); }\n    main {\n      max-width: 900px;\n      margin: 0 auto;\n      padding: 3rem 1.5rem;\n    }\n    h1 { font-size: 2.5rem; margin: 0 0 1rem 0; }\n    .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; }\n    .actions {\n      display: flex;\n      gap: 1rem;\n      margin-bottom: 3rem;\n    }\n    .btn {\n      padding: 0.75rem 1.5rem;\n      background: var(--accent);\n      color: #fff;\n      text-decoration: none;\n      border-radius: 6px;\n      font-weight: 600;\n      border: none;\n      cursor: pointer;\n    }\n    .btn.secondary {\n      background: transparent;\n      border: 1px solid var(--border);\n      color: var(--text);\n    }\n    .btn:hover { opacity: 0.9; }\n    .features {\n      display: grid;\n      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));\n      gap: 1rem;\n      margin-top: 2rem;\n    }\n    .feature {\n      background: var(--card);\n      border: 1px solid var(--border);\n      border-radius: 6px;\n      padding: 1.25rem;\n    }\n    .feature h3 { margin: 0 0 0.5rem 0; font-size: 1rem; }\n    .feature p { margin: 0; color: var(--muted); font-size: 0.9rem; }\n  </style>\n</head>\n<body>\n  <nav>\n    <div class=\"brand\">AuditEngine</div>\n    <div>\n      <a href=\"/\">Home</a>\n      <a href=\"/audit/new\">New Audit</a>\n      <a href=\"/dashboard\">Dashboard</a>\n    </div>\n  </nav>\n\n  <main>\n    <h1>Multi-agent codebase audits</h1>\n    <p class=\"subtitle\">10 specialist AI agents analyze your repository, cross-verify findings, and stream results to a live dashboard.</p>\n\n    <div class=\"actions\">\n      <a class=\"btn\" href=\"/audit/new\">Start New Audit</a>\n      <a class=\"btn secondary\" href=\"/dashboard\">Open Dashboard</a>\n    </div>\n\n    <div class=\"features\">\n      <div class=\"feature\">\n        <h3>Parallel agents</h3>\n        <p>Security, API, frontend, database, architecture, testing, performance, devops, documentation, and visual QA run concurrently.</p>\n      </div>\n      <div class=\"feature\">\n        <h3>Evidence-first gate</h3>\n        <p>Every finding must quote real code from the source file. Banned phrases and hallucinations are rejected automatically.</p>\n      </div>\n      <div class=\"feature\">\n        <h3>Live dashboard</h3>\n        <p>Watch agent state, findings, tasks, budget, and salvation reports update in real time over WebSocket.</p>\n      </div>\n      <div class=\"feature\">\n        <h3>Priority tasks</h3>\n        <p>Findings are scored, grouped, and converted into a prioritized task board with conflict detection.</p>\n      </div>\n    </div>\n  </main>\n</body>\n</html>\n"
+export const HOME_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AuditEngine — Home</title>
+  <style>
+    :root {
+      --bg: #111;
+      --text: #e5e5e5;
+      --muted: #888;
+      --card: #1a1a1a;
+      --border: #333;
+      --accent: #3b82f6;
+      --green: #22c55e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    nav {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    nav .brand { font-weight: 700; font-size: 1.2rem; }
+    nav a { color: var(--text); text-decoration: none; margin-left: 1rem; }
+    nav a:hover { color: var(--accent); }
+    main {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 3rem 1.5rem;
+    }
+    h1 { font-size: 2.5rem; margin: 0 0 1rem 0; }
+    .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; }
+    .actions {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 3rem;
+    }
+    .btn {
+      padding: 0.75rem 1.5rem;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+    }
+    .btn.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn:hover { opacity: 0.9; }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    .feature {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1.25rem;
+    }
+    .feature h3 { margin: 0 0 0.5rem 0; font-size: 1rem; }
+    .feature p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="brand">AuditEngine</div>
+    <div>
+      <a href="/">Home</a>
+      <a href="/audit/new">New Audit</a>
+      <a href="/dashboard">Dashboard</a>
+    </div>
+  </nav>
+
+  <main>
+    <h1>Multi-agent codebase audits</h1>
+    <p class="subtitle">10 specialist AI agents analyze your repository, cross-verify findings, and stream results to a live dashboard.</p>
+
+    <div class="actions">
+      <a class="btn" href="/audit/new">Start New Audit</a>
+      <a class="btn secondary" href="/dashboard">Open Dashboard</a>
+    </div>
+
+    <div class="features">
+      <div class="feature">
+        <h3>Parallel agents</h3>
+        <p>Nineteen specialist agents — security, API, frontend, backend, database, architecture, testing, performance, devops, dependency, documentation, a11y, i18n, logging, code quality, error handling, configuration, refactoring, and visual QA — run concurrently.</p>
+      </div>
+      <div class="feature">
+        <h3>Evidence-first gate</h3>
+        <p>Every finding must quote real code from the source file. Banned phrases and hallucinations are rejected automatically.</p>
+      </div>
+      <div class="feature">
+        <h3>Live dashboard</h3>
+        <p>Watch agent state, findings, tasks, budget, and salvation reports update in real time over WebSocket.</p>
+      </div>
+      <div class="feature">
+        <h3>Priority tasks</h3>
+        <p>Findings are scored, grouped, and converted into a prioritized task board with conflict detection.</p>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
+`

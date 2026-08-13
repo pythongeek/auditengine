@@ -1,0 +1,221 @@
+I  M  P  L  E  M  E  N  T  A  T  I  O  N     P  L  A  N
+Multi-Agent AI
+Engineering Audit
+Platform
+Implementation Plan
+Phase 4 of 5: Implementation Planning
+Document Version: 1.0
+Date: 2026-08-03
+Classification: Internal - Engineering
+CONFIDENTIAL                                        Anti-Hallucination AI Audit Platform
+Table of Contents
+1. Implementation Overview
+This Implementation Plan defines the phased delivery schedule for the Anti-Hallucination Multi-Agent AI Engineering Audit Platform. The plan spans five phases across an estimated 16-week timeline, progressing from core infrastructure through to production readiness. Each phase has defined entry criteria, deliverables, exit criteria, and risk mitigations. The phases are designed so that each produces a working, demonstrable increment of the platform, enabling continuous stakeholder feedback and course correction. The plan accounts for the Cloudflare platform constraints identified in the Gap Analysis (128MB memory limit, Durable Object cold starts, 300-second CPU limit) and incorporates the mitigation approaches defined for each gap.
+2. Phase 1: Foundation (Weeks 1-3)
+2.1 Objectives
+Phase 1 establishes the foundational infrastructure that all subsequent phases depend on. The primary objectives are: deploy the Cloudflare Worker skeleton with all Durable Object bindings, create the D1 database with all eight tables and indexes, configure R2 bucket for file chunk storage, implement the Ingestion Worker with file chunking logic, and build the API Gateway with authentication middleware. By the end of Phase 1, the platform can accept a repository upload, chunk its files, store them in R2, and serve them via API, but no agent analysis occurs yet.
+2.2 Deliverables
+ID
+Deliverable
+Description
+Exit Criteria
+P1-D01
+Worker Skeleton
+Cloudflare Worker with wrangler.toml, DO bindings, D1/R2/Queue config
+wrangler deploy succeeds; all bindings verified
+P1-D02
+D1 Schema
+All 8 tables with indexes, foreign keys, constraints
+Schema migration runs; all tables queryable
+P1-D03
+R2 Storage
+File chunk upload, retrieval, deletion operations
+Upload 100 chunks; retrieve all with 100% fidelity
+P1-D04
+Ingestion Worker
+File chunking at 500-line segments; domain tagging; manifest writing
+Ingest 3 test repos; verify chunk counts
+P1-D05
+API Gateway
+Auth middleware; tenant routing; rate limiting; error handling
+All API endpoints return correct status codes
+P1-D06
+Dashboard Shell
+Cloudflare Pages app with login, tenant selector, audit list
+Dashboard renders; auth flow completes
+3. Phase 2: Core Agent System (Weeks 4-7)
+3.1 Objectives
+Phase 2 implements the core multi-agent orchestration system. The primary objectives are: implement the Coordinator Agent as a Durable Object, implement three initial specialist agents (Security, Architecture, Performance), build the claims table and file claiming mechanism, implement the ReAct loop for iterative analysis, integrate with AI Gateway for LLM calls, implement the Verification Gate with schema validation, and build the real-time WebSocket event stream. By the end of Phase 2, the platform can perform a complete audit of a small repository using three agents, with findings displayed on the dashboard in real time.
+3.2 Deliverables
+ID
+Deliverable
+Description
+Exit Criteria
+P2-D01
+Coordinator Agent
+Durable Object with spawn, status tracking, registry management
+Spawns 3 agents; tracks status transitions
+P2-D02
+Security Agent
+Full ReAct loop; claim/read/analyze/write; Verification Gate integration
+Detects 80%+ of OWASP Top 10 in test repo
+P2-D03
+Architecture Agent
+Module boundary analysis; dependency graph; circular dependency detection
+Identifies all circular deps in test repo
+P2-D04
+Performance Agent
+N+1 detection; missing index identification; caching assessment
+Flags all known perf issues in test repo
+P2-D05
+Claims System
+Atomic file claiming via composite PK; claim status tracking
+No duplicate file analysis in concurrent test
+P2-D06
+Verification Gate
+Schema validation; evidence check; severity gate; cross-reference gate
+Rejects 100% of fabricated evidence in tests
+P2-D07
+WebSocket Stream
+Real-time finding.created and agent.status events
+Dashboard updates within 2s of finding creation
+P2-D08
+AI Gateway Integration
+Multi-provider LLM routing; fallback; error handling
+Successful calls to Kimi, Claude, and GPT-4o
+4. Phase 3: Full Agent Roster and Enforcement (Weeks 8-11)
+4.1 Objectives
+Phase 3 expands the agent roster to all 15 specialists, implements the complete anti-hallucination enforcement stack (CONSTITUTION.md, evidence verification pipeline, behavioral tuning), closes the critical gaps identified in the Gap Analysis (token budget, secrets redaction, rate limiting), and implements the Salvation Protocol and Production Readiness Score. By the end of Phase 3, the platform is feature-complete for initial production use.
+4.2 Deliverables
+ID
+Deliverable
+Description
+Exit Criteria
+P3-D01
+12 Additional Agents
+API, DB, Testing, Frontend, Backend, Infra, Dependency, A11Y, I18n, Visual QA, Documentation, Logging agents
+All 15 agents pass unit tests with test repo
+P3-D02
+CONSTITUTION.md
+Constitutional rules injected into all agent system prompts
+No agent produces ungrounded findings in 100-run test
+P3-D03
+Evidence Verification
+R2 substring match; fuzzy matching; evidence_verified tagging
+100% rejection rate for fabricated evidence
+P3-D04
+Behavioral Tuning
+Per-agent temp/top_p config; tenant-level overrides
+Temperature reduction decreases false positive rate
+P3-D05
+Salvation Protocol
+3-strike retry; Research Phase; Salvation Report generation
+Salvation Report produced for all unresolvable findings
+P3-D06
+Token Budget Manager
+Session-level budget; per-agent limits; real-time tracking
+Audit halts at budget limit; dashboard shows usage
+P3-D07
+Secrets Redaction
+Pre-LLM pattern redaction; post-analysis hash redaction
+No raw secrets in LLM payloads or stored findings
+P3-D08
+Production Readiness Score
+Score calculation; trend tracking; score update triggers
+Score updates within 10s of finding status change
+P3-D09
+Priority Resolver
+Deterministic composite score; Workflow implementation
+Scores are consistent across repeated runs
+5. Phase 4: Advanced Features (Weeks 12-14)
+5.1 Objectives
+Phase 4 implements the advanced features identified as Phase 4 targets in the Gap Analysis: Git diff ingestion for incremental audits, multi-repository support with dependency tracking, and staged environment testing via the Visual QA Agent. This phase also implements the continuous audit lifecycle (re-analysis on file change, recurrence counting, auto-close resolved findings, regression flagging). By the end of Phase 4, the platform supports production-grade continuous auditing workflows.
+5.2 Deliverables
+ID
+Deliverable
+Description
+Exit Criteria
+P4-D01
+Git Diff Ingestion
+GitHub API integration; changed file detection; incremental chunking
+10-file diff ingested in under 30 seconds
+P4-D02
+Multi-Repo Support
+Repository groups; cross-repo dependency tracking; trigger propagation
+Shared lib change triggers consuming repo re-audit
+P4-D03
+Visual QA Enhancement
+Staged env API testing; screenshot comparison; admin-elevated testing
+Visual QA detects 5/5 known UI regressions
+P4-D04
+Continuous Lifecycle
+Re-analysis on change; recurrence counting; auto-close; regression flagging
+File change triggers re-audit within 5 minutes
+P4-D05
+Cross-Agent Knowledge
+Knowledge ledger queries; finding correlation; severity escalation
+Security finding triggers API agent re-check
+6. Phase 5: Production Hardening (Weeks 15-16)
+6.1 Objectives
+Phase 5 focuses on production readiness: performance optimization, load testing, security audit, documentation, and onboarding. The primary objectives are: optimize D1 query performance with additional indexes and read replicas, conduct load testing with simulated multi-tenant workloads, perform a security audit of the authentication and authorization layers, write comprehensive API documentation and user guides, and build an onboarding wizard for new tenants. By the end of Phase 5, the platform is ready for production deployment.
+6.2 Deliverables
+ID
+Deliverable
+Description
+Exit Criteria
+P5-D01
+Performance Optimization
+Query optimization; caching; read replicas
+P95 API latency under 200ms
+P5-D02
+Load Testing
+10 concurrent tenants; 100 concurrent WebSocket connections
+No errors under sustained load for 1 hour
+P5-D03
+Security Audit
+Pen test auth layer; tenant isolation verification; secrets handling review
+Zero critical/high findings from pen test
+P5-D04
+API Documentation
+OpenAPI spec; endpoint docs; code examples; error reference
+All endpoints documented with examples
+P5-D05
+Onboarding Wizard
+Step-by-step tenant setup; first audit walkthrough; help tooltips
+New tenant completes first audit without support
+7. Risk Register
+Risk ID
+Description
+Probability
+Impact
+Mitigation
+R-001
+LLM provider API downtime during audit
+Medium
+High
+Multi-provider fallback via AI Gateway
+R-002
+Agent produces systematic false positives
+Medium
+High
+Behavioral tuning; evidence verification; Salvation Protocol
+R-003
+D1 database reaches 10GB limit
+Low
+Medium
+Data retention policies; archival to R2
+R-004
+Durable Object memory exhaustion
+Low
+High
+State checkpointing; 500-line chunk limit; memory monitoring
+R-005
+Cross-tenant data leakage
+Very Low
+Critical
+tenant_id in every query; composite PKs; security audit
+R-006
+Cloudflare platform breaking changes
+Low
+Medium
+Pinned compatibility_date; abstraction layer

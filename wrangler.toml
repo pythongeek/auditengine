@@ -16,17 +16,84 @@ bucket_name = "auditengine-r2"
 [durable_objects]
 bindings = [
   { name = "AGENT_DO", class_name = "AgentDurableObject" },
+  { name = "SECURITY_AGENT_DO", class_name = "SecurityAgentDurableObject" },
+  { name = "API_AGENT_DO", class_name = "ApiAgentDurableObject" },
+  { name = "FRONTEND_AGENT_DO", class_name = "FrontendAgentDurableObject" },
+  { name = "DATABASE_AGENT_DO", class_name = "DatabaseAgentDurableObject" },
+  { name = "ARCHITECTURE_AGENT_DO", class_name = "ArchitectureAgentDurableObject" },
+  { name = "TESTING_AGENT_DO", class_name = "TestingAgentDurableObject" },
+  { name = "PERFORMANCE_AGENT_DO", class_name = "PerformanceAgentDurableObject" },
+  { name = "DEVOPS_AGENT_DO", class_name = "DevopsAgentDurableObject" },
+  { name = "DOCUMENTATION_AGENT_DO", class_name = "DocumentationAgentDurableObject" },
+  { name = "VISUAL_QA_AGENT_DO", class_name = "VisualQaAgentDurableObject" },
+  { name = "BACKEND_AGENT_DO", class_name = "BackendAgentDurableObject" },
+  { name = "DEPENDENCY_AGENT_DO", class_name = "DependencyAgentDurableObject" },
+  { name = "A11Y_AGENT_DO", class_name = "A11yAgentDurableObject" },
+  { name = "I18N_AGENT_DO", class_name = "I18nAgentDurableObject" },
+  { name = "LOGGING_AGENT_DO", class_name = "LoggingAgentDurableObject" },
+  { name = "CODE_QUALITY_AGENT_DO", class_name = "CodeQualityAgentDurableObject" },
+  { name = "ERROR_HANDLING_AGENT_DO", class_name = "ErrorHandlingAgentDurableObject" },
+  { name = "CONFIGURATION_AGENT_DO", class_name = "ConfigurationAgentDurableObject" },
+  { name = "REFACTORING_AGENT_DO", class_name = "RefactoringAgentDurableObject" },
+  { name = "SHARED_MEMORY_DO", class_name = "SharedMemoryDurableObject" },
   { name = "COORDINATOR_DO", class_name = "CoordinatorDurableObject" },
-  { name = "DASHBOARD_DO", class_name = "DashboardDurableObject" }
+  { name = "DASHBOARD_DO", class_name = "DashboardDurableObject" },
+  { name = "RATE_LIMIT_DO", class_name = "RateLimiterDurableObject" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AgentDurableObject", "CoordinatorDurableObject", "DashboardDurableObject"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RateLimiterDurableObject"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = [
+  "SecurityAgentDurableObject", "ApiAgentDurableObject", "FrontendAgentDurableObject",
+  "DatabaseAgentDurableObject", "ArchitectureAgentDurableObject", "TestingAgentDurableObject",
+  "PerformanceAgentDurableObject", "DevopsAgentDurableObject", "DocumentationAgentDurableObject",
+  "VisualQaAgentDurableObject", "BackendAgentDurableObject", "DependencyAgentDurableObject",
+  "A11yAgentDurableObject", "I18nAgentDurableObject", "LoggingAgentDurableObject",
+  "CodeQualityAgentDurableObject", "ErrorHandlingAgentDurableObject", "ConfigurationAgentDurableObject",
+  "RefactoringAgentDurableObject"
+]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["SharedMemoryDurableObject"]
+
 [vars]
 STAGING_URL = "https://PASTE_STAGING_URL_HERE"
 ADMIN_EMAIL = "admin@example.com"
+JWT_SECRET = "dev-secret-change-in-production"
 
 [browser]
 binding = "BROWSER"
+
+[[queues.producers]]
+binding = "WRITE_QUEUE"
+queue = "auditengine-write-queue"
+
+[[queues.consumers]]
+queue = "auditengine-write-queue"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+
+[[workflows]]
+binding = "PRIORITY_RESOLVER_WORKFLOW"
+name = "priority-resolver"
+class_name = "PriorityResolverWorkflow"
+
+[[workflows]]
+binding = "SALVATION_WORKFLOW"
+name = "salvation"
+class_name = "SalvationWorkflow"
+
+[[workflows]]
+binding = "CONTINUOUS_AUDIT_WORKFLOW"
+name = "continuous-audit"
+class_name = "ContinuousAuditWorkflow"

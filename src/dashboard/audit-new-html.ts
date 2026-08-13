@@ -1,1 +1,218 @@
-export const AUDIT_NEW_HTML = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n  <title>AuditEngine — New Audit</title>\n  <style>\n    :root {\n      --bg: #111;\n      --text: #e5e5e5;\n      --muted: #888;\n      --card: #1a1a1a;\n      --border: #333;\n      --accent: #3b82f6;\n      --green: #22c55e;\n      --red: #ef4444;\n    }\n    * { box-sizing: border-box; }\n    body {\n      margin: 0;\n      font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n      background: var(--bg);\n      color: var(--text);\n      line-height: 1.5;\n    }\n    nav {\n      padding: 1rem 1.5rem;\n      border-bottom: 1px solid var(--border);\n      display: flex;\n      justify-content: space-between;\n      align-items: center;\n    }\n    nav .brand { font-weight: 700; font-size: 1.2rem; }\n    nav a { color: var(--text); text-decoration: none; margin-left: 1rem; }\n    nav a:hover { color: var(--accent); }\n    main {\n      max-width: 900px;\n      margin: 0 auto;\n      padding: 2rem 1.5rem;\n    }\n    h1 { font-size: 2rem; margin: 0 0 1.5rem 0; }\n    .card {\n      background: var(--card);\n      border: 1px solid var(--border);\n      border-radius: 6px;\n      padding: 1.5rem;\n      margin-bottom: 1.5rem;\n    }\n    label { display: block; margin-bottom: 0.4rem; font-weight: 600; }\n    input[type=\"text\"], input[type=\"file\"], textarea {\n      width: 100%;\n      padding: 0.6rem;\n      background: var(--bg);\n      border: 1px solid var(--border);\n      border-radius: 4px;\n      color: var(--text);\n      font-family: inherit;\n    }\n    input[type=\"file\"] { padding: 0.4rem; }\n    textarea {\n      min-height: 160px;\n      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;\n      font-size: 0.85rem;\n    }\n    .hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }\n    .row { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; }\n    .btn {\n      padding: 0.7rem 1.4rem;\n      background: var(--accent);\n      color: #fff;\n      text-decoration: none;\n      border-radius: 6px;\n      font-weight: 600;\n      border: none;\n      cursor: pointer;\n    }\n    .btn.secondary {\n      background: transparent;\n      border: 1px solid var(--border);\n      color: var(--text);\n    }\n    .btn:hover { opacity: 0.9; }\n    .btn:disabled { opacity: 0.5; cursor: not-allowed; }\n    #fileList { margin-top: 0.5rem; font-size: 0.85rem; color: var(--muted); }\n    #status { margin-top: 1rem; font-weight: 600; }\n    #status.ok { color: var(--green); }\n    #status.err { color: var(--red); }\n  </style>\n</head>\n<body>\n  <nav>\n    <div class=\"brand\">AuditEngine</div>\n    <div>\n      <a href=\"/\">Home</a>\n      <a href=\"/audit/new\">New Audit</a>\n      <a href=\"/dashboard\">Dashboard</a>\n    </div>\n  </nav>\n\n  <main>\n    <h1>Start New Audit</h1>\n\n    <div class=\"card\">\n      <label for=\"auditId\">Audit Run ID</label>\n      <input type=\"text\" id=\"auditId\" placeholder=\"run-2026-08-08-001\" />\n      <div class=\"hint\">Leave blank to auto-generate. Use only letters, numbers, dashes, and underscores.</div>\n    </div>\n\n    <div class=\"card\">\n      <label for=\"files\">Source Files</label>\n      <input type=\"file\" id=\"files\" multiple />\n      <div class=\"hint\">Select one or more text files (source code, configs, docs). Files are read as UTF-8 text.</div>\n      <div id=\"fileList\">No files selected.</div>\n    </div>\n\n    <div class=\"card\">\n      <label for=\"paste\">Or Paste Files (JSON array)</label>\n      <textarea id=\"paste\" placeholder='[{\"path\":\"src/index.ts\",\"content\":\"console.log(1);\"}]'></textarea>\n      <div class=\"hint\">If you paste JSON here, it overrides file selection. Format: array of {path, content}.</div>\n    </div>\n\n    <div class=\"row\">\n      <button class=\"btn\" id=\"startBtn\">Start Audit</button>\n      <a class=\"btn secondary\" href=\"/dashboard\">Go to Dashboard</a>\n    </div>\n\n    <div id=\"status\"></div>\n  </main>\n\n  <script>\n    const fileInput = document.getElementById('files');\n    const fileList = document.getElementById('fileList');\n    const pasteArea = document.getElementById('paste');\n    const startBtn = document.getElementById('startBtn');\n    const statusEl = document.getElementById('status');\n    const auditIdInput = document.getElementById('auditId');\n\n    let selectedFiles = [];\n\n    fileInput.addEventListener('change', () => {\n      selectedFiles = Array.from(fileInput.files);\n      fileList.textContent = selectedFiles.length\n        ? selectedFiles.map(f => f.name).join(', ')\n        : 'No files selected.';\n    });\n\n    function generateId() {\n      const now = new Date();\n      const pad = (n) => String(n).padStart(2, '0');\n      return `run-${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;\n    }\n\n    function readFiles(files) {\n      return Promise.all(files.map(f => {\n        return new Promise((resolve, reject) => {\n          const reader = new FileReader();\n          reader.onload = () => resolve({ path: f.name, content: reader.result });\n          reader.onerror = reject;\n          reader.readAsText(f);\n        });\n      }));\n    }\n\n    startBtn.addEventListener('click', async () => {\n      statusEl.className = '';\n      statusEl.textContent = '';\n      startBtn.disabled = true;\n\n      try {\n        let auditId = auditIdInput.value.trim();\n        if (!auditId) auditId = generateId();\n        if (!/^[a-zA-Z0-9_-]+$/.test(auditId)) {\n          throw new Error('Audit Run ID must contain only letters, numbers, dashes, and underscores.');\n        }\n\n        let filesPayload;\n        const pasted = pasteArea.value.trim();\n        if (pasted) {\n          filesPayload = JSON.parse(pasted);\n          if (!Array.isArray(filesPayload)) throw new Error('Pasted JSON must be an array.');\n        } else {\n          if (selectedFiles.length === 0) {\n            throw new Error('Select files or paste a JSON array.');\n          }\n          filesPayload = await readFiles(selectedFiles);\n        }\n\n        if (filesPayload.length === 0) {\n          throw new Error('At least one file is required.');\n        }\n\n        const resp = await fetch('/audit/start', {\n          method: 'POST',\n          headers: { 'Content-Type': 'application/json' },\n          body: JSON.stringify({ audit_run_id: auditId, files: filesPayload }),\n        });\n\n        const data = await resp.json().catch(() => ({}));\n        if (!resp.ok) {\n          throw new Error(data.message || `HTTP ${resp.status}`);\n        }\n\n        statusEl.className = 'ok';\n        statusEl.textContent = `Audit started: ${auditId}. Redirecting to dashboard…`;\n        setTimeout(() => {\n          location.href = `/dashboard?audit_run_id=${encodeURIComponent(auditId)}`;\n        }, 1200);\n      } catch (err) {\n        statusEl.className = 'err';\n        statusEl.textContent = err.message;\n      } finally {\n        startBtn.disabled = false;\n      }\n    });\n  </script>\n</body>\n</html>\n"
+export const AUDIT_NEW_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AuditEngine — New Audit</title>
+  <style>
+    :root {
+      --bg: #111;
+      --text: #e5e5e5;
+      --muted: #888;
+      --card: #1a1a1a;
+      --border: #333;
+      --accent: #3b82f6;
+      --green: #22c55e;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    nav {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    nav .brand { font-weight: 700; font-size: 1.2rem; }
+    nav a { color: var(--text); text-decoration: none; margin-left: 1rem; }
+    nav a:hover { color: var(--accent); }
+    main {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+    h1 { font-size: 2rem; margin: 0 0 1.5rem 0; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    label { display: block; margin-bottom: 0.4rem; font-weight: 600; }
+    input[type="text"], input[type="file"], textarea {
+      width: 100%;
+      padding: 0.6rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: inherit;
+    }
+    input[type="file"] { padding: 0.4rem; }
+    textarea {
+      min-height: 160px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem;
+    }
+    .hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }
+    .row { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; }
+    .btn {
+      padding: 0.7rem 1.4rem;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+    }
+    .btn.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #fileList { margin-top: 0.5rem; font-size: 0.85rem; color: var(--muted); }
+    #status { margin-top: 1rem; font-weight: 600; }
+    #status.ok { color: var(--green); }
+    #status.err { color: var(--red); }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="brand">AuditEngine</div>
+    <div>
+      <a href="/">Home</a>
+      <a href="/audit/new">New Audit</a>
+      <a href="/dashboard">Dashboard</a>
+    </div>
+  </nav>
+
+  <main>
+    <h1>Start New Audit</h1>
+
+    <div class="card">
+      <label for="auditId">Audit Run ID</label>
+      <input type="text" id="auditId" placeholder="run-2026-08-08-001" />
+      <div class="hint">Leave blank to auto-generate. Use only letters, numbers, dashes, and underscores.</div>
+    </div>
+
+    <div class="card">
+      <label for="files">Source Files</label>
+      <input type="file" id="files" multiple />
+      <div class="hint">Select one or more text files (source code, configs, docs). Files are read as UTF-8 text.</div>
+      <div id="fileList">No files selected.</div>
+    </div>
+
+    <div class="card">
+      <label for="paste">Or Paste Files (JSON array)</label>
+      <textarea id="paste" placeholder='[{"path":"src/index.ts","content":"console.log(1);"}]'></textarea>
+      <div class="hint">If you paste JSON here, it overrides file selection. Format: array of {path, content}.</div>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="startBtn">Start Audit</button>
+      <a class="btn secondary" href="/dashboard">Go to Dashboard</a>
+    </div>
+
+    <div id="status"></div>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById('files');
+    const fileList = document.getElementById('fileList');
+    const pasteArea = document.getElementById('paste');
+    const startBtn = document.getElementById('startBtn');
+    const statusEl = document.getElementById('status');
+    const auditIdInput = document.getElementById('auditId');
+
+    let selectedFiles = [];
+
+    fileInput.addEventListener('change', () => {
+      selectedFiles = Array.from(fileInput.files);
+      fileList.textContent = selectedFiles.length
+        ? selectedFiles.map(f => f.name).join(', ')
+        : 'No files selected.';
+    });
+
+    function generateId() {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return \`run-\${now.getFullYear()}-\${pad(now.getMonth()+1)}-\${pad(now.getDate())}-\${pad(now.getHours())}\${pad(now.getMinutes())}\${pad(now.getSeconds())}\`;
+    }
+
+    function readFiles(files) {
+      return Promise.all(files.map(f => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve({ path: f.name, content: reader.result });
+          reader.onerror = reject;
+          reader.readAsText(f);
+        });
+      }));
+    }
+
+    startBtn.addEventListener('click', async () => {
+      statusEl.className = '';
+      statusEl.textContent = '';
+      startBtn.disabled = true;
+
+      try {
+        let auditId = auditIdInput.value.trim();
+        if (!auditId) auditId = generateId();
+        if (!/^[a-zA-Z0-9_-]+\$/.test(auditId)) {
+          throw new Error('Audit Run ID must contain only letters, numbers, dashes, and underscores.');
+        }
+
+        let filesPayload;
+        const pasted = pasteArea.value.trim();
+        if (pasted) {
+          filesPayload = JSON.parse(pasted);
+          if (!Array.isArray(filesPayload)) throw new Error('Pasted JSON must be an array.');
+        } else {
+          if (selectedFiles.length === 0) {
+            throw new Error('Select files or paste a JSON array.');
+          }
+          filesPayload = await readFiles(selectedFiles);
+        }
+
+        if (filesPayload.length === 0) {
+          throw new Error('At least one file is required.');
+        }
+
+        const resp = await fetch('/audit/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audit_run_id: auditId, files: filesPayload }),
+        });
+
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          throw new Error(data.message || \`HTTP \${resp.status}\`);
+        }
+
+        statusEl.className = 'ok';
+        statusEl.textContent = \`Audit started: \${auditId}. Redirecting to dashboard…\`;
+        setTimeout(() => {
+          location.href = \`/dashboard?audit_run_id=\${encodeURIComponent(auditId)}\`;
+        }, 1200);
+      } catch (err) {
+        statusEl.className = 'err';
+        statusEl.textContent = err.message;
+      } finally {
+        startBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+`

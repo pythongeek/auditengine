@@ -1,8 +1,19 @@
+import type { Env } from '../types/index'
+import { uploadChunk } from '../lib/r2-storage'
+import { extractZipFiles, type RepoFile } from '../lib/zip'
+import { fetchRepoFiles } from '../lib/github'
+import { detectLanguage } from '../lib/lang'
+
 interface ManifestEntry {
-  filePath:   string
-  domain:     string
-  chunkCount: number
-  byteSize:   number
+  filePath:      string
+  domain:        string
+  chunkCount:    number
+  lineCount:     number
+  byteSize:      number
+  contentHash:   string
+  language:      string
+  lastModified:  number
+  r2Key:         string
 }
 
 export function chunkFile(content: string, chunkSize = 500): string[] {
@@ -20,7 +31,7 @@ export function chunkFile(content: string, chunkSize = 500): string[] {
 export function tagDomain(filePath: string): string {
   const lower = filePath.toLowerCase()
 
-  if (lower.startsWith('test/') || lower.startsWith('__tests__/') || lower.endsWith('.test.ts')) {
+  if (lower.startsWith('test/') || lower.startsWith('__tests__/') || lower.endsWith('.test.ts') || lower.endsWith('.test.js')) {
     return 'test'
   }
 
@@ -44,23 +55,21 @@ export function tagDomain(filePath: string): string {
     return 'docs'
   }
 
+  if (lower.endsWith('.sol')) return 'smart-contract'
+
   return 'all'
 }
 
-export async function writeChunksToR2(
-  auditRunId: string,
-  filePath: string,
-  chunks: string[],
-  r2: R2Bucket
-): Promise<number> {
-  for (let i = 0; i < chunks.length; i++) {
-    const key = `chunks/${auditRunId}/${filePath}/${i}`
-    await r2.put(key, chunks[i])
-  }
-  return chunks.length
+async function sha256ContentHash(content: string): Promise<string> {
+  const data = new TextEncoder().encode(content)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
 }
 
 export async function writeManifest(
+  tenantId: string,
   auditRunId: string,
   files: ManifestEntry[],
   db: D1Database
@@ -68,10 +77,56 @@ export async function writeManifest(
   const statements = files.map(file =>
     db
       .prepare(`
-        INSERT INTO repo_manifest (audit_run_id, file_path, domain, chunk_count, byte_size)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO repo_manifest (
+          tenant_id, audit_run_id, file_path, domain, chunk_count, byte_size,
+          content_hash, language, last_modified, r2_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      .bind(auditRunId, file.filePath, file.domain, file.chunkCount, file.byteSize)
+      .bind(
+        tenantId,
+        auditRunId,
+        file.filePath,
+        file.domain,
+        file.chunkCount,
+        file.byteSize,
+        file.contentHash,
+        file.language,
+        file.lastModified,
+        file.r2Key
+      )
+  )
+
+  if (statements.length > 0) {
+    await db.batch(statements)
+  }
+}
+
+export async function writeFiles(
+  tenantId: string,
+  auditRunId: string,
+  files: ManifestEntry[],
+  db: D1Database
+): Promise<void> {
+  const statements = files.map(file =>
+    db
+      .prepare(`
+        INSERT OR IGNORE INTO files (
+          tenant_id, audit_run_id, path, language, domain_tag, line_count,
+          chunk_count, r2_key, last_analyzed_at, content_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+      `)
+      .bind(
+        tenantId,
+        auditRunId,
+        file.filePath,
+        file.language,
+        file.domain,
+        file.lineCount,
+        file.chunkCount,
+        file.r2Key,
+        file.lastModified,
+        file.contentHash
+      )
   )
 
   if (statements.length > 0) {
@@ -80,19 +135,70 @@ export async function writeManifest(
 }
 
 export async function createRunBudget(
+  tenantId: string,
   auditRunId: string,
   budgetUsd: number,
   db: D1Database
 ): Promise<void> {
   await db
-    .prepare('INSERT OR IGNORE INTO run_budget (audit_run_id, budget_usd) VALUES (?, ?)')
-    .bind(auditRunId, budgetUsd)
+    .prepare('INSERT OR IGNORE INTO run_budget (tenant_id, audit_run_id, budget_usd) VALUES (?, ?, ?)')
+    .bind(tenantId, auditRunId, budgetUsd)
     .run()
 }
 
-export interface IngestionRequestBody {
-  audit_run_id: string
-  files: Array<{ path: string; content: string }>
+async function ensureAuditSession(
+  tenantId: string,
+  auditRunId: string,
+  totalFiles: number,
+  db: D1Database,
+  repoUrl?: string,
+  branch?: string,
+  commitSha?: string
+): Promise<void> {
+  await db
+    .prepare(`
+      INSERT OR IGNORE INTO audit_sessions (
+        id, tenant_id, status, total_files, repo_url, repo_branch, last_commit_sha, created_at
+      ) VALUES (?, ?, 'pending', ?, ?, ?, ?, unixepoch())
+    `)
+    .bind(auditRunId, tenantId, totalFiles, repoUrl ?? '', branch ?? 'main', commitSha ?? null)
+    .run()
+
+  await db
+    .prepare('UPDATE audit_sessions SET total_files = ?, repo_url = ?, repo_branch = ?, last_commit_sha = ? WHERE id = ?')
+    .bind(totalFiles, repoUrl ?? '', branch ?? 'main', commitSha ?? null, auditRunId)
+    .run()
+}
+
+async function processRepoFile(
+  tenantId: string,
+  auditRunId: string,
+  file: RepoFile,
+  r2: R2Bucket
+): Promise<ManifestEntry> {
+  const chunks = chunkFile(file.content)
+  const contentHash = await sha256ContentHash(file.content)
+  const domain = tagDomain(file.path)
+  const language = detectLanguage(file.path)
+  const lineCount = file.content.split('\n').length
+
+  // Upload the first chunk and use its key as the manifest r2_key reference.
+  const r2Key = await uploadChunk(tenantId, auditRunId, file.path, 0, chunks[0] ?? '', r2)
+  for (let i = 1; i < chunks.length; i++) {
+    await uploadChunk(tenantId, auditRunId, file.path, i, chunks[i], r2)
+  }
+
+  return {
+    filePath: file.path,
+    domain,
+    chunkCount: chunks.length,
+    lineCount,
+    byteSize: new TextEncoder().encode(file.content).length,
+    contentHash,
+    language,
+    lastModified: file.lastModified,
+    r2Key,
+  }
 }
 
 export interface IngestionResponseBody {
@@ -101,54 +207,144 @@ export interface IngestionResponseBody {
   total_chunks: number
 }
 
+function getTenantId(request: Request): string {
+  return request.headers.get('X-Tenant-Id') ?? ''
+}
+
+interface ParsedRepoFiles {
+  auditRunId: string
+  files: RepoFile[]
+  repoUrl?: string
+  branch?: string
+  commitSha?: string
+}
+
+async function parseRepoFiles(request: Request, env: Env): Promise<ParsedRepoFiles | Response> {
+  const contentType = request.headers.get('Content-Type') ?? ''
+
+  if (contentType.includes('multipart/form-data')) {
+    const formData = await request.formData()
+    const auditRunId = formData.get('audit_run_id') as string | null
+    if (!auditRunId) {
+      return new Response('Missing audit_run_id', { status: 400 })
+    }
+    const zipFile = formData.get('zip')
+    if (!zipFile || typeof zipFile === 'string') {
+      return new Response('Missing zip file', { status: 400 })
+    }
+    const buffer = await zipFile.arrayBuffer()
+    const files = await extractZipFiles(buffer)
+    const repoUrl = formData.get('repo_url') as string | null
+    const branch = formData.get('branch') as string | null
+    const commitSha = formData.get('commit_sha') as string | null
+    return { auditRunId, files, repoUrl: repoUrl ?? undefined, branch: branch ?? undefined, commitSha: commitSha ?? undefined }
+  }
+
+  // JSON body: either { repo_url, branch? } or { audit_run_id, files: [...] }
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return new Response('Invalid JSON', { status: 400 })
+  }
+
+  if (!body || typeof body !== 'object') {
+    return new Response('Invalid JSON body', { status: 400 })
+  }
+
+  const b = body as Record<string, unknown>
+
+  if (b.repo_url && typeof b.repo_url === 'string') {
+    const branch = typeof b.branch === 'string' ? b.branch : undefined
+    const commitSha = typeof b.commit_sha === 'string' ? b.commit_sha : undefined
+    const files = await fetchRepoFiles(b.repo_url, branch, env.GITHUB_TOKEN)
+    const auditRunId = typeof b.audit_run_id === 'string' ? b.audit_run_id : `github-${Date.now()}`
+    return { auditRunId, files, repoUrl: b.repo_url, branch, commitSha }
+  }
+
+  if (!b.audit_run_id || typeof b.audit_run_id !== 'string') {
+    return new Response('Missing audit_run_id', { status: 400 })
+  }
+
+  if (!Array.isArray(b.files)) {
+    return new Response('Missing files array', { status: 400 })
+  }
+
+  const files: RepoFile[] = b.files
+    .filter((f: unknown): f is { path: string; content: string } => {
+      return !!f && typeof f === 'object' && 'path' in (f as object) && 'content' in (f as object)
+    })
+    .map((f: { path: string; content: string }) => ({
+      path: f.path,
+      content: f.content,
+      lastModified: Date.now(),
+    }))
+
+  const repoUrl = typeof b.repo_url === 'string' ? b.repo_url : undefined
+  const branch = typeof b.branch === 'string' ? b.branch : undefined
+  const commitSha = typeof b.commit_sha === 'string' ? b.commit_sha : undefined
+
+  return { auditRunId: b.audit_run_id, files, repoUrl, branch, commitSha }
+}
+
+async function broadcastRepoReady(
+  tenantId: string,
+  auditRunId: string,
+  fileCount: number,
+  dashboardDO: DurableObjectNamespace
+): Promise<void> {
+  const id = dashboardDO.idFromName('dashboard-' + auditRunId)
+  const stub = dashboardDO.get(id)
+  await stub.fetch(new Request('https://dashboard/broadcast', {
+    method: 'POST',
+    body: JSON.stringify({
+      type: 'repo_ready',
+      audit_run_id: auditRunId,
+      payload: { tenant_id: tenantId, file_count: fileCount },
+      ts: Date.now(),
+    }),
+    headers: { 'Content-Type': 'application/json' },
+  })).catch(() => {
+    // broadcast failures are non-fatal
+  })
+}
+
 export default {
-  async fetch(request: Request, env: { DB: D1Database; R2: R2Bucket }): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 })
     }
 
-    let body: IngestionRequestBody
-    try {
-      body = await request.json() as IngestionRequestBody
-    } catch {
-      return new Response('Invalid JSON', { status: 400 })
+    const tenantId = getTenantId(request)
+
+    const parsed = await parseRepoFiles(request, env)
+    if (parsed instanceof Response) {
+      return parsed
     }
 
-    if (!body.audit_run_id || typeof body.audit_run_id !== 'string') {
-      return new Response('Missing audit_run_id', { status: 400 })
-    }
+    const { auditRunId, files, repoUrl, branch, commitSha } = parsed
 
-    if (!Array.isArray(body.files)) {
-      return new Response('Missing files array', { status: 400 })
+    if (files.length === 0) {
+      return new Response('No valid files to ingest', { status: 400 })
     }
 
     const manifestEntries: ManifestEntry[] = []
     let totalChunks = 0
 
-    for (const file of body.files) {
-      if (!file.path || typeof file.content !== 'string') {
-        continue
-      }
-
-      const chunks = chunkFile(file.content)
-      const chunkCount = await writeChunksToR2(body.audit_run_id, file.path, chunks, env.R2)
-      const domain = tagDomain(file.path)
-
-      manifestEntries.push({
-        filePath: file.path,
-        domain,
-        chunkCount,
-        byteSize: new TextEncoder().encode(file.content).length,
-      })
-
-      totalChunks += chunkCount
+    for (const file of files) {
+      const entry = await processRepoFile(tenantId, auditRunId, file, env.R2)
+      manifestEntries.push(entry)
+      totalChunks += entry.chunkCount
     }
 
-    await writeManifest(body.audit_run_id, manifestEntries, env.DB)
-    await createRunBudget(body.audit_run_id, 5.0, env.DB)
+    await writeManifest(tenantId, auditRunId, manifestEntries, env.DB)
+    await writeFiles(tenantId, auditRunId, manifestEntries, env.DB)
+    await createRunBudget(tenantId, auditRunId, 5.0, env.DB)
+    await ensureAuditSession(tenantId, auditRunId, manifestEntries.length, env.DB, repoUrl, branch, commitSha)
+    await broadcastRepoReady(tenantId, auditRunId, manifestEntries.length, env.DASHBOARD_DO)
 
     const response: IngestionResponseBody = {
-      audit_run_id: body.audit_run_id,
+      audit_run_id: auditRunId,
       file_count: manifestEntries.length,
       total_chunks: totalChunks,
     }

@@ -298,6 +298,7 @@ export function qaStepToFinding(step: QAStep, result: StepResult, route: RouteIn
     source: 'visual_qa',
     status: 'open',
     recurrence_count: 0,
+    is_regression: false,
     ts: Date.now(),
     verified_at: null,
     screenshot_id: result.screenshot_id,

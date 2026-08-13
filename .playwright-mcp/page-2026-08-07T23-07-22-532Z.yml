@@ -1,0 +1,31 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e3]: AuditEngine
+    - generic [ref=e4]:
+      - link "Home" [ref=e5] [cursor=pointer]:
+        - /url: /
+      - link "New Audit" [ref=e6] [cursor=pointer]:
+        - /url: /audit/new
+      - link "Dashboard" [ref=e7] [cursor=pointer]:
+        - /url: /dashboard
+  - main [ref=e8]:
+    - heading "Multi-agent codebase audits" [level=1] [ref=e9]
+    - paragraph [ref=e10]: 10 specialist AI agents analyze your repository, cross-verify findings, and stream results to a live dashboard.
+    - generic [ref=e11]:
+      - link "Start New Audit" [ref=e12] [cursor=pointer]:
+        - /url: /audit/new
+      - link "Open Dashboard" [ref=e13] [cursor=pointer]:
+        - /url: /dashboard
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - heading "Parallel agents" [level=3] [ref=e16]
+        - paragraph [ref=e17]: Security, API, frontend, database, architecture, testing, performance, devops, documentation, and visual QA run concurrently.
+      - generic [ref=e18]:
+        - heading "Evidence-first gate" [level=3] [ref=e19]
+        - paragraph [ref=e20]: Every finding must quote real code from the source file. Banned phrases and hallucinations are rejected automatically.
+      - generic [ref=e21]:
+        - heading "Live dashboard" [level=3] [ref=e22]
+        - paragraph [ref=e23]: Watch agent state, findings, tasks, budget, and salvation reports update in real time over WebSocket.
+      - generic [ref=e24]:
+        - heading "Priority tasks" [level=3] [ref=e25]
+        - paragraph [ref=e26]: Findings are scored, grouped, and converted into a prioritized task board with conflict detection.

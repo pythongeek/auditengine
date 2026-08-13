@@ -10,7 +10,8 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "^0.0.14"
+    "@cloudflare/puppeteer": "^0.0.14",
+    "fflate": "^0.8.2"
   },
   "devDependencies": {
     "wrangler": "^3.0.0",
