@@ -112,7 +112,8 @@ export interface GateContext {
 export type TaskType =
   | "deep_audit" | "simple_analysis" | "cross_read_summary"
   | "salvation_research" | "visual_qa_script" | "verification"
-  | "trace_analysis" | "conflict_resolution"
+  | "trace_analysis" | "conflict_resolution" | "qa_script_gen"
+  | "gate_retry" | "dedup" | "task_description" | "log_summary" | "fallback"
 
 export interface LLMCallParams {
   agentId:    string

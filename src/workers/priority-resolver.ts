@@ -88,13 +88,13 @@ export function detectConflicts(findings: Finding[]): ConflictGroup[] {
 
   for (const [file, fileFindings] of byFile.entries()) {
     const hasSecurity = fileFindings.some(f => f.agent_type === 'security')
-    const hasArchitecture = fileFindings.some(f => f.agent_type === 'architecture')
+    const hasRefactoring = fileFindings.some(f => f.agent_type === 'refactoring')
 
-    if (hasSecurity && hasArchitecture) {
+    if (hasSecurity && hasRefactoring) {
       conflicts.push({
         file,
         finding_ids: fileFindings.map(f => f.finding_id),
-        reason: 'Security and Architecture agents both flagged this file; needs human review.',
+        reason: 'Security and Refactoring agents both flagged this file; needs human review.',
         resolution: 'needs_human_decision',
       })
     }

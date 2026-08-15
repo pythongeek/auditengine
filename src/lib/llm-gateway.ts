@@ -1,6 +1,6 @@
 import type { Env, LLMCallParams, NormalizedResponse, RawUsage,
   Provider, Model, DashboardEvent, Message } from '../types/index'
-import { routeToModel } from './model-router'
+import { routeToModel, applyBudgetOverride } from './model-router'
 import { getAgentConfig } from './agent-config'
 import { redactForLLM } from './secrets'
 import { checkTokenBudget } from './token-budget'
@@ -141,14 +141,24 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
   const tenantId = auditSession?.tenant_id ?? ''
 
   const agentConfig = await getAgentConfig(db, tenantId, agentType)
-  const route = routeToModel(taskType, agentConfig)
 
-  const tokenBudget = await checkTokenBudget(db, auditRunId, route.maxTokens)
+  // Estimate input tokens to drive the routing table's size override.
+  const inputTokenCount = messages.reduce((sum, m) => {
+    return sum + Math.ceil((m.content ?? '').length / 4)
+  }, 0)
+
+  const route = routeToModel(taskType, agentConfig, agentType, inputTokenCount)
+
+  const tokenBudget = await checkTokenBudget(db, auditRunId, route.budget)
   if (!tokenBudget.allowed) {
     throw new BudgetExhaustedError(
-      `Token budget exhausted for audit run ${auditRunId}: ${tokenBudget.used}/${tokenBudget.budget} tokens used, ${route.maxTokens} requested`
+      `Token budget exhausted for audit run ${auditRunId}: ${tokenBudget.used}/${tokenBudget.budget} tokens used, ${route.budget} requested`
     )
   }
+
+  // At 80% spend, downgrade expensive models (except salvation/trace analysis).
+  const spentPct = tokenBudget.budget > 0 ? tokenBudget.used / tokenBudget.budget : 0
+  const finalRoute = applyBudgetOverride(route, spentPct)
 
   const isSalvation = taskType === 'salvation_research'
   const agentRateAllowed = await checkAgentRateLimit(
@@ -165,8 +175,8 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
     )
   }
 
-  const apiKey = getApiKey(route.provider, env)
-  const endpoint = ENDPOINTS[route.model]
+  const apiKey = getApiKey(finalRoute.provider, env)
+  const endpoint = ENDPOINTS[finalRoute.model]
 
   const temperature = agentConfig.temperature
   const topP = agentConfig.top_p
@@ -177,11 +187,11 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
   }))
 
   let body: Record<string, unknown>
-  if (route.provider === 'kimi') {
+  if (finalRoute.provider === 'kimi') {
     body = {
-      model: route.model,
+      model: finalRoute.model,
       messages: redactedMessages,
-      max_tokens: route.maxTokens,
+      max_tokens: finalRoute.maxTokens,
       temperature,
       top_p: topP,
     }
@@ -191,9 +201,9 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
       m.role === 'assistant' ? { role: m.role, text: m.content } : { role: m.role, text: m.content }
     )
     body = {
-      model: route.model,
+      model: finalRoute.model,
       messages: minimaxMessages,
-      tokens_to_generate: route.maxTokens,
+      tokens_to_generate: finalRoute.maxTokens,
       temperature,
       top_p: topP,
     }
@@ -214,9 +224,9 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
   }
 
   const raw = await res.json()
-  const normalized = normalizeResponse(route.provider, raw)
+  const normalized = normalizeResponse(finalRoute.provider, raw)
 
-  const costUsd = calcCostUsd(route.model, normalized.usage)
+  const costUsd = calcCostUsd(finalRoute.model, normalized.usage)
 
   await db
     .prepare(`
@@ -227,7 +237,7 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
     .bind(
       auditRunId,
       agentId,
-      route.model,
+      finalRoute.model,
       taskType,
       normalized.usage.prompt_tokens,
       normalized.usage.completion_tokens,
@@ -241,7 +251,7 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
     audit_run_id: auditRunId,
     agent_id: agentId,
     payload: {
-      model: route.model,
+      model: finalRoute.model,
       task_type: taskType,
       prompt_tokens: normalized.usage.prompt_tokens,
       completion_tokens: normalized.usage.completion_tokens,

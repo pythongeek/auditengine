@@ -267,6 +267,16 @@ Tool: Kimi Code
 | test/shared-memory.test.ts | ✅ | S31 — uses `makeMockWorkflows()` |
 | test/workflows.test.ts | ✅ | S31 — 3 workflow instantiation/delegation tests |
 
+## PHASE S — SPEC ALIGNMENT (PRODUCTION READY PLAN PHASE 1)
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/types/index.ts | ✅ | S32 — extended `TaskType` with `gate_retry`, `dedup`, `task_description`, `qa_script_gen`, `log_summary`, `fallback` |
+| src/lib/model-router.ts | ✅ | S32 — `getRoutingConfig()` matches Build Guide budgets per task/agent; `RouteDecision` includes `budget`; input > 100K auto-overrides to K2.6 130K; `routeToModel` applies agent-config overrides |
+| src/lib/llm-gateway.ts | ✅ | S32 — estimates input tokens, passes `agentType` and `inputTokenCount` to router; uses `route.budget` for session check; applies `applyBudgetOverride` at ≥80% spend; logs final model to `token_usage` |
+| src/workers/priority-resolver.ts | ✅ | S32 — conflict detection now flags Security + Refactoring (was Security + Architecture) per PRD/Build Guide |
+| test/model-router.test.ts | ✅ | S32 — 21 cases covering all documented task types, input override, agent-config overrides, and budget override behavior |
+
 ## INTEGRATION + DEPLOY
 
 | Item | Status | Notes |
@@ -309,8 +319,8 @@ None yet.
 Last run: 2026-08-12
 Result: PASS
 Errors: 0
-Tests: 97 passed (gate 21, model-router 8, auth 6, ingestion 8, agent-config 4, secrets 10, token-budget 9, rate-limiter 10, queue 6, coordinator 5, base-agent 4, shared-memory 3, workflows 3)
-Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type declarations; S20 aligned schema with RFC/PRD files, agent_config, audit_sessions, audit_logs tables; S21 hardened Verification Gate to RFC §4.6.3; S22 wired agent_config through llmCall, model-router, gate, coordinator, and tenant config/score endpoints; S23 implemented Architecture §3.2 fuzzy evidence matching and EVIDENCE_NOT_FOUND code; S24 implemented Gap Analysis GAP-006 two-stage secrets redaction; S25 implemented Implementation Plan P3-D06 / Gap Analysis GAP-005 session token budget enforcement; S26 implemented Gap Analysis GAP-007 / Implementation Plan P1-D05 + P3-D07 tiered API rate limiting with per-tenant RateLimiter Durable Object, per-agent LLM rate limiting, and X-Priority salvation bypass; S27 completed GAP-007 async write queue with Cloudflare Queues, true buffering for non-priority write requests, and per-message ack/retry consumer; S28 expanded AgentType to 19 documented specialists, updated schema for RFC/Build Guide compliance (claims composite PK, finding lifecycle states, is_regression, last_commit_sha), and persisted repo metadata through ingestion; S29 implemented coordinator 30s alarm, domain-aware agent spawning, Agent Registry with domain/assigned_files, 19 per-agent Durable Object classes + wrangler bindings/migration, and 9 new specialist constitutions; S30 bounded the ReAct loop to 5 iterations per chunk, added SharedMemoryDurableObject-backed knowledge ledger, and implemented write-time recurrence/regression detection; S31 wrapped long-running `runPriorityResolver` and `runSalvationProtocol` in Cloudflare Workflows, added `ContinuousAuditWorkflow` stub, and wired all workflow bindings through `wrangler.toml`
+Tests: 110 passed (gate 21, model-router 21, auth 6, ingestion 8, agent-config 4, secrets 10, token-budget 9, rate-limiter 10, queue 6, coordinator 5, base-agent 4, shared-memory 3, workflows 3)
+Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type declarations; ...; S32 aligned model-router budgets to Build Guide and RFC, added `TaskType` union values, applied budget override in `llmCall`, and corrected Priority Resolver conflict rule to Security + Refactoring
 
 ## SCHEMA ALIGNMENT NOTES
 - New RFC/PRD-aligned tables added alongside existing tables (repo_manifest retained for backward compatibility).
@@ -358,3 +368,4 @@ Note: added "dom" to lib and skipLibCheck to support @cloudflare/puppeteer type 
 | S29 | 2026-08-08 | Coordinator & agent roster: 30s alarm, domain-aware spawn, registry with domain/assigned_files, 19 per-agent DO classes, 9 new constitutions | src/types/index.ts, src/db/schema.sql, src/workers/coordinator.ts, src/agents/base-agent.ts, src/workers/agents/*.ts, src/workers/agents/index.ts, src/index.ts, wrangler.toml, src/constitutions/*.md, test/helpers.ts, test/auth.test.ts, test/ingestion.test.ts, test/queue.test.ts, test/coordinator.test.ts, BUILD_STATE.md | |
 | S30 | 2026-08-12 | Bounded ReAct, SharedMemory DO, recurrence detection | src/types/index.ts, src/db/schema.sql, src/workers/shared-memory.ts, src/index.ts, src/agents/base-agent.ts, wrangler.toml, test/mocks/cloudflare-workers.ts, test/helpers.ts, test/base-agent.test.ts, test/shared-memory.test.ts, BUILD_STATE.md | |
 | S31 | 2026-08-12 | Cloudflare Workflows for priority resolver, salvation, and continuous audit | src/types/index.ts, src/workflows/*.ts, src/workers/coordinator.ts, src/agents/base-agent.ts, src/index.ts, wrangler.toml, test/mocks/cloudflare-workers.ts, test/helpers.ts, test/*.test.ts, test/workflows.test.ts, BUILD_STATE.md | |
+| S32 | 2026-08-12 | Spec alignment: Build-Guide model-router budgets, input > 100K override, budget override in llmCall, Priority Resolver Security+Refactoring conflict rule | src/types/index.ts, src/lib/model-router.ts, src/lib/llm-gateway.ts, src/workers/priority-resolver.ts, test/model-router.test.ts, BUILD_STATE.md | |
