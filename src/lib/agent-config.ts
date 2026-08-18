@@ -7,7 +7,19 @@ export const ALL_AGENT_TYPES: AgentType[] = [
   'code_quality', 'error_handling', 'configuration', 'refactoring',
 ]
 
-export const DEFAULT_AGENT_CONFIG: Omit<AgentConfig, 'id' | 'tenant_id' | 'agent_id' | 'created_at' | 'updated_at'> = {
+export const NON_CRITICAL_AGENT_TYPES: AgentType[] = [
+  'testing',
+  'documentation',
+  'performance',
+  'visual_qa',
+  'logging',
+]
+
+export function isCriticalAgentType(agentType: AgentType): boolean {
+  return !NON_CRITICAL_AGENT_TYPES.includes(agentType)
+}
+
+export const DEFAULT_AGENT_CONFIG: Omit<AgentConfig, 'id' | 'tenant_id' | 'agent_id' | 'created_at' | 'updated_at' | 'critical'> = {
   model_provider: 'kimi',
   model_name: 'kimi-k3',
   temperature: 0.1,
@@ -28,13 +40,19 @@ export async function getAgentConfig(
     .bind(tenantId, agentType)
     .first<AgentConfig>()
 
-  if (row) return row
+  if (row) {
+    return {
+      ...row,
+      critical: row.critical ?? isCriticalAgentType(agentType),
+    }
+  }
 
   return {
     id: '',
     tenant_id: tenantId,
     agent_id: agentType,
     ...DEFAULT_AGENT_CONFIG,
+    critical: isCriticalAgentType(agentType),
     created_at: 0,
     updated_at: 0,
   }
@@ -50,8 +68,8 @@ export async function ensureDefaultAgentConfig(
     .prepare(`
       INSERT OR IGNORE INTO agent_config (
         tenant_id, agent_id, model_provider, model_name, temperature, top_p,
-        max_tokens, evidence_required, max_retries, llm_calls_per_minute, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+        max_tokens, evidence_required, max_retries, llm_calls_per_minute, critical, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
     `)
     .bind(
       tenantId,
@@ -63,7 +81,8 @@ export async function ensureDefaultAgentConfig(
       defaults.max_tokens,
       defaults.evidence_required ? 1 : 0,
       defaults.max_retries,
-      defaults.llm_calls_per_minute
+      defaults.llm_calls_per_minute,
+      isCriticalAgentType(agentType) ? 1 : 0
     )
     .run()
 }
@@ -88,8 +107,8 @@ export async function setAgentConfig(
     .prepare(`
       INSERT INTO agent_config (
         tenant_id, agent_id, model_provider, model_name, temperature, top_p,
-        max_tokens, evidence_required, max_retries, llm_calls_per_minute, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+        max_tokens, evidence_required, max_retries, llm_calls_per_minute, critical, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
       ON CONFLICT(tenant_id, agent_id) DO UPDATE SET
         model_provider = excluded.model_provider,
         model_name     = excluded.model_name,
@@ -99,6 +118,7 @@ export async function setAgentConfig(
         evidence_required = excluded.evidence_required,
         max_retries    = excluded.max_retries,
         llm_calls_per_minute = excluded.llm_calls_per_minute,
+        critical       = excluded.critical,
         updated_at     = excluded.updated_at
     `)
     .bind(
@@ -111,7 +131,8 @@ export async function setAgentConfig(
       merged.max_tokens,
       merged.evidence_required ? 1 : 0,
       merged.max_retries,
-      merged.llm_calls_per_minute
+      merged.llm_calls_per_minute,
+      merged.critical ? 1 : 0
     )
     .run()
 
@@ -127,5 +148,8 @@ export async function listAgentConfigs(
     .bind(tenantId)
     .all<AgentConfig>()
 
-  return rows.results ?? []
+  return (rows.results ?? []).map(row => ({
+    ...row,
+    critical: row.critical ?? isCriticalAgentType(row.agent_id as AgentType),
+  }))
 }

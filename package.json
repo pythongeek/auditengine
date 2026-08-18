@@ -7,16 +7,22 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest run",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "e2e:install": "playwright install chromium",
+    "e2e": "playwright test",
+    "load-test": "tsx scripts/load-test.ts",
+    "security-audit": "tsx scripts/security-audit.ts"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^0.0.14",
     "fflate": "^0.8.2"
   },
   "devDependencies": {
-    "wrangler": "^3.0.0",
     "@cloudflare/workers-types": "^4.0.0",
+    "@playwright/test": "^1.46.0",
+    "tsx": "^4.23.12",
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0"
+    "vitest": "^1.0.0",
+    "wrangler": "^3.0.0"
   }
 }

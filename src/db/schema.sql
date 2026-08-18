@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS tenants (
   id         TEXT PRIMARY KEY,
   name       TEXT NOT NULL,
   plan       TEXT NOT NULL DEFAULT 'free',
+  github_token    TEXT DEFAULT NULL,
+  gitlab_token    TEXT DEFAULT NULL,
+  bitbucket_token TEXT DEFAULT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -90,6 +93,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_run_status ON tasks(tenant_id, audit_run_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_run_status ON tasks(audit_run_id, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_run_status_lock ON tasks(audit_run_id, status, lock_expires_at);
 
 -- Agent registry (written by coordinator, read by coordinator + dashboard)
 CREATE TABLE IF NOT EXISTS agent_registry (
@@ -131,6 +135,7 @@ CREATE TABLE IF NOT EXISTS run_budget (
   budget_usd       REAL NOT NULL DEFAULT 5.0,
   spent_usd        REAL NOT NULL DEFAULT 0.0,
   paused           INTEGER NOT NULL DEFAULT 0,  -- 1 = halt all agents
+  throttled        INTEGER NOT NULL DEFAULT 0,  -- 1 = halt non-critical agents (80% budget)
   phase            TEXT NOT NULL DEFAULT 'boot',
   production_score INTEGER NOT NULL DEFAULT 0,
   alert_50_sent    INTEGER NOT NULL DEFAULT 0,
@@ -227,6 +232,37 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE INDEX IF NOT EXISTS idx_files_tenant_run_domain ON files(tenant_id, audit_run_id, domain_tag);
 CREATE INDEX IF NOT EXISTS idx_files_run_domain ON files(audit_run_id, domain_tag);
 
+-- Repository groups: multi-repo audits and cross-repo dependency propagation
+CREATE TABLE IF NOT EXISTS repo_groups (
+  group_id   TEXT PRIMARY KEY,
+  tenant_id  TEXT NOT NULL DEFAULT '',
+  name       TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_repo_groups_tenant ON repo_groups(tenant_id);
+
+CREATE TABLE IF NOT EXISTS repo_group_members (
+  group_id     TEXT NOT NULL,
+  audit_run_id TEXT NOT NULL,
+  role         TEXT NOT NULL CHECK(role IN ('consumer','dependency','service')),
+  PRIMARY KEY (group_id, audit_run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_repo_group_members_run ON repo_group_members(audit_run_id);
+CREATE INDEX IF NOT EXISTS idx_repo_group_members_group ON repo_group_members(group_id);
+
+CREATE TABLE IF NOT EXISTS repo_dependencies (
+  id               TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+  tenant_id        TEXT NOT NULL DEFAULT '',
+  group_id         TEXT NOT NULL,
+  dependency_path  TEXT NOT NULL,
+  consumer_run_id  TEXT NOT NULL,
+  provider_run_id  TEXT NOT NULL,
+  UNIQUE(group_id, dependency_path, consumer_run_id, provider_run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_repo_dependencies_provider ON repo_dependencies(provider_run_id, dependency_path);
+CREATE INDEX IF NOT EXISTS idx_repo_dependencies_consumer ON repo_dependencies(consumer_run_id, dependency_path);
+CREATE INDEX IF NOT EXISTS idx_repo_dependencies_group ON repo_dependencies(group_id);
+
 -- Agent config: per-tenant per-agent behavioral tuning
 CREATE TABLE IF NOT EXISTS agent_config (
   id                TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
@@ -240,6 +276,7 @@ CREATE TABLE IF NOT EXISTS agent_config (
   evidence_required INTEGER NOT NULL DEFAULT 1,
   max_retries       INTEGER NOT NULL DEFAULT 3,
   llm_calls_per_minute INTEGER NOT NULL DEFAULT 10,
+  critical          INTEGER NOT NULL DEFAULT 1,
   created_at        INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at        INTEGER NOT NULL DEFAULT (unixepoch()),
   UNIQUE(tenant_id, agent_id)
@@ -260,6 +297,13 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_run ON audit_logs(tenant_id, au
 CREATE INDEX IF NOT EXISTS idx_audit_logs_run ON audit_logs(audit_run_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_type ON audit_logs(event_type);
 
+-- Application settings (encrypted values)
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,  -- AES-GCM encrypted
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 -- ── TRIGGERS: Budget enforcement ──────────────────────────────────────────
 
 -- After every token_usage insert: add to spent_usd and check thresholds
@@ -271,7 +315,20 @@ BEGIN
       updated_at = unixepoch()
   WHERE audit_run_id = NEW.audit_run_id;
 
-  -- Pause if over budget
+  -- Throttle non-critical agents at 80% and pause everyone at 95%.
+  UPDATE run_budget
+  SET throttled = 1
+  WHERE audit_run_id = NEW.audit_run_id
+    AND throttled = 0
+    AND spent_usd >= budget_usd * 0.80;
+
+  UPDATE run_budget
+  SET paused = 1
+  WHERE audit_run_id = NEW.audit_run_id
+    AND paused = 0
+    AND spent_usd >= budget_usd * 0.95;
+
+  -- Final guard: pause if over budget
   UPDATE run_budget
   SET paused = 1
   WHERE audit_run_id = NEW.audit_run_id

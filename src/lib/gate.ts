@@ -1,5 +1,5 @@
 import type { GateResult, GateContext, ValidatedFinding } from '../types/index'
-import { getChunk } from './r2-storage'
+import { getChunk, makeChunkKey, sha256Hex } from './r2-storage'
 import { getAgentConfig } from './agent-config'
 import { redactForStorage } from './secrets'
 
@@ -81,12 +81,22 @@ async function evidenceInR2(
   auditRunId: string,
   filePath: string,
   evidenceQuote: string,
-  r2: R2Bucket
+  r2: R2Bucket,
+  chunkCache?: Map<string, string>
 ): Promise<EvidenceMatch> {
   for (let index = 0; index < 100; index++) {
-    const chunkObj = await getChunk(tenantId, auditRunId, filePath, index, r2)
-    if (chunkObj === null) break
-    const text = await chunkObj.text()
+    const filePathHash = await sha256Hex(filePath)
+    const key = makeChunkKey(tenantId, auditRunId, filePathHash, index)
+    let text: string | null = null
+    if (chunkCache?.has(key)) {
+      text = chunkCache.get(key) ?? null
+    }
+    if (text === null) {
+      const chunkObj = await getChunk(tenantId, auditRunId, filePath, index, r2)
+      if (chunkObj === null) break
+      text = await chunkObj.text()
+      chunkCache?.set(key, text)
+    }
     if (text.includes(evidenceQuote)) return 'exact'
     if (looseMatch(text, evidenceQuote)) return 'fuzzy'
     if (fuzzyMatch(text, evidenceQuote)) return 'fuzzy'
@@ -226,7 +236,7 @@ export async function runGate(
         }
       }
 
-      evidenceMatch = await evidenceInR2(tenantId, ctx.auditRunId, ctx.currentFile, evidenceQuote, ctx.r2)
+      evidenceMatch = await evidenceInR2(tenantId, ctx.auditRunId, ctx.currentFile, evidenceQuote, ctx.r2, ctx.chunkCache)
       if (!evidenceMatch) {
         return {
           passed: false,

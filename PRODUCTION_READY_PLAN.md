@@ -26,14 +26,14 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 2 — Budget Pause Enforcement (medium risk, no new secrets)
 
-### Step 2.1 — Agent criticality classification
+### Step 2.1 — Agent criticality classification ✅ S33
 **Files:** `src/lib/agent-config.ts`, `src/types/index.ts`, `src/lib/agent-config.ts`
 - Add a `critical` boolean (or enum `criticality`) to `AgentConfig`/`DEFAULT_AGENT_CONFIG`.
 - Non-critical agents: `testing`, `documentation`, `performance`, `visual_qa`, `logging` (RFC/PRD discretion). All other 19 agents are critical.
 - Ensure `ensureDefaultAgentConfig` writes the new column.
 - **Acceptance:** default config rows contain the correct criticality values.
 
-### Step 2.2 — Coordinator 80/95 pause logic
+### Step 2.2 — Coordinator 80/95 pause logic ✅ S33
 **Files:** `src/workers/coordinator.ts`, `test/coordinator.test.ts`, `src/db/schema.sql`
 - In `CoordinatorDurableObject.alarm()`, after reading `run_budget` alert flags, act on them:
   - `alert_80_sent = 1` and not yet acted: `UPDATE agent_registry SET status = 'paused' WHERE audit_run_id = ? AND agent_type IN (non-critical list)`.
@@ -47,8 +47,8 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 3 — Real External Research for Salvation (needs new secrets/APIs)
 
-### Step 3.1 — Research adapter framework
-**Files:** `src/lib/external-research.ts` (new), `src/types/index.ts`, `src/lib/salvation.ts`, `test/salvation.test.ts` (new)
+### Step 3.1 — Research adapter framework ✅ S34
+**Files:** `src/lib/external-research.ts` (new), `src/types/index.ts`, `src/lib/salvation.ts`, `test/salvation.test.ts` (new), `test/external-research.test.ts` (new)
 - Add `ExternalResearchSource` interface and a `ResearchAdapter` interface: `{ search(query: string): Promise<SalvationResearchSource[]> }`.
 - Implement three adapters with timeouts and result limiting:
   - `NvdAdapter` — `fetch` to `https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=...` (no key, rate-limit friendly).
@@ -58,7 +58,7 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 - Cache results in `knowledge_ledger` with `knowledge_type = 'research'` to avoid repeated external calls for the same file/category.
 - **Acceptance:** tests mock each adapter; real adapters do not crash when keys are missing.
 
-### Step 3.2 — Wire research into Salvation Protocol
+### Step 3.2 — Wire research into Salvation Protocol ✅ S34
 **Files:** `src/workers/salvation.ts`, `src/agents/base-agent.ts`, `wrangler.toml`
 - Derive 2–3 keyword queries from the gate rejection history and the current file category.
 - Call the adapters in parallel, collect up to 5 sources, deduplicate by URL.
@@ -71,7 +71,7 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 4 — Task Lifecycle REST API (medium risk, no new secrets)
 
-### Step 4.1 — Task/Finding endpoints
+### Step 4.1 — Task/Finding endpoints ✅ S35
 **Files:** `src/lib/router.ts`, `src/index.ts`, `test/queue.test.ts` / `test/coordinator.test.ts`
 - Add handlers:
   - `GET /api/v1/tenants/:tenantId/audits/:auditRunId/tasks` — list tasks with status filter.
@@ -82,7 +82,7 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 - Wire into `src/index.ts` under `dispatchRoute`.
 - **Acceptance:** unit tests cover each endpoint, ownership enforcement, and invalid status transitions (400).
 
-### Step 4.2 — Lock timeout and commit wiring
+### Step 4.2 — Lock timeout and commit wiring ✅ S35
 **Files:** `src/workers/coordinator.ts`, `src/lib/router.ts`, `src/db/schema.sql` (no schema change needed)
 - On `PATCH → in_progress`, set `tasks.lock_expires_at = unixepoch() + 48 * 3600` and `assigned_agent`.
 - In `CoordinatorDurableObject.alarm()`, add a query to find tasks with `status = 'in_progress' AND lock_expires_at < unixepoch()` and reset them to `backlog` with `assigned_agent = NULL`, broadcasting `task_status_change`.
@@ -93,14 +93,14 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 5 — Verification Hardening (needs real repo metadata)
 
-### Step 5.1 — Parse owner/repo from stored repo URL
+### Step 5.1 — Parse owner/repo from stored repo URL ✅ S36
 **Files:** `src/workers/verification.ts`, `src/lib/github.ts`, `test/verification.test.ts` (new)
 - Replace hardcoded `OWNER`/`REPO` in `verifyTask` with values parsed from `audit_sessions.repo_url` for the task's `audit_run_id`.
 - Parse `https://github.com/owner/repo` and `https://github.com/owner/repo/tree/branch` formats; default branch to `audit_sessions.repo_branch`.
 - If `repo_url` is missing or unsupported, return `VerifyResult { result: 'failed', reason: 'Missing repo_url' }` and log `agent_errors`.
 - **Acceptance:** tests with mock `audit_sessions` rows verify correct owner/repo extraction and failure when absent.
 
-### Step 5.2 — Regression scan
+### Step 5.2 — Regression scan ✅ S36
 **Files:** `src/workers/verification.ts`, `src/workers/coordinator.ts`, `test/verification.test.ts`
 - Implement `scheduleRegressionScan` instead of the stub:
   - For each finding that was just verified as resolved, spawn a lightweight re-analysis for its file by the same agent type (or create a new `regression` task) with a `since_commit` parameter.
@@ -108,7 +108,7 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 - Use the `content_hash` or `last_commit_sha` fields to know what to compare against.
 - **Acceptance:** a regression test shows a resolved finding re-appearing in a diff and a new `is_regression = 1` finding is created.
 
-### Step 5.3 — Visual QA re-run gate and human sign-off
+### Step 5.3 — Visual QA re-run gate and human sign-off ✅ S36
 **Files:** `src/workers/visual-qa.ts`, `src/lib/router.ts`, `src/workers/coordinator.ts`, `src/types/index.ts`
 - When a task containing `screenshot_id` findings moves to `in_review`, the coordinator (or verification handler) re-runs `runVisualQA` against `env.STAGING_URL` and verifies the screenshot still shows the issue.
 - If the re-run fails, the task status returns to `backlog` with a reason.
@@ -119,14 +119,14 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 6 — Continuous Audit / Git Diff Worker (needs real Git access)
 
-### Step 6.1 — Git diff helper
+### Step 6.1 — Git diff helper ✅ S37
 **Files:** `src/lib/git-diff.ts` (new), `src/lib/github.ts`, `test/git-diff.test.ts` (new)
 - Functions: `getLatestCommit(owner, repo, branch, token)`, `getChangedFilesSince(owner, repo, baseSha, headSha, token)`, `fetchRawFile(owner, repo, path, ref, token)`.
 - Return typed arrays of `{ path, status, new_content }`.
 - **Acceptance:** tests mock GitHub API; failure paths return null and log errors.
 
-### Step 6.2 — Continuous audit workflow implementation
-**Files:** `src/workflows/continuous-audit-workflow.ts`, `src/workers/coordinator.ts`, `src/agents/base-agent.ts`, `wrangler.toml`, `test/workflows.test.ts`
+### Step 6.2 — Continuous audit workflow implementation ✅ S37
+**Files:** `src/workflows/continuous-audit-workflow.ts`, `src/workers/coordinator.ts`, `src/agents/base-agent.ts`, `src/workers/ingestion.ts`, `wrangler.toml`, `test/workflows.test.ts`
 - Schedule the workflow hourly via `wrangler.toml` `schedules = ["0 * * * *"]` on `CONTINUOUS_AUDIT_WORKFLOW`.
 - Steps inside the workflow:
   1. `fetch-latest-commit` — compare with `audit_sessions.last_commit_sha`. If unchanged, exit.
@@ -138,8 +138,8 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
   7. `update-last-commit` — write the new `last_commit_sha` to `audit_sessions`.
 - **Acceptance:** workflow tests with mocked GitHub and DO stubs verify all seven steps execute in order and commit is updated.
 
-### Step 6.3 — Webhook ingestion trigger
-**Files:** `src/index.ts`, `src/lib/router.ts`, `test/queue.test.ts` or new `test/webhooks.test.ts`
+### Step 6.3 — Webhook ingestion trigger ✅ S37
+**Files:** `src/index.ts`, `src/lib/router.ts`, `test/webhooks.test.ts` (new)
 - Add `POST /webhooks/github`, `/webhooks/gitlab`, `/webhooks/bitbucket` (gitlab/bitbucket can be no-ops initially but must return 200).
 - GitHub webhook verifies `X-Hub-Signature-256` using `env.GITHUB_WEBHOOK_SECRET` (new secret), parses `push` events, and triggers `CONTINUOUS_AUDIT_WORKFLOW.create({ id, params })` for the affected `audit_run_id`.
 - **Acceptance:** tests verify signature validation and workflow creation; invalid signature returns 401.
@@ -148,7 +148,7 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 7 — Multi-Repository Support (high risk, schema change)
 
-### Step 7.1 — Repository group schema
+### Step 7.1 — Repository group schema ✅ S38
 **Files:** `src/db/schema.sql`, `src/types/index.ts`, `src/workers/ingestion.ts`, `src/lib/router.ts`
 - Add tables:
   - `repo_groups(tenant_id, group_id, name, created_at)`
@@ -158,7 +158,7 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 - Update `ensureAuditSession` to store group membership.
 - **Acceptance:** migration tests verify tables; ingestion with group_id succeeds.
 
-### Step 7.2 — Cross-repo propagation
+### Step 7.2 — Cross-repo propagation ✅ S38
 **Files:** `src/workers/coordinator.ts`, `src/workers/verification.ts`, `src/lib/router.ts`
 - When a finding in a `provider` run is marked `resolved`, lookup `repo_dependencies` and trigger verification in related `consumer` runs for the same file path.
 - When a shared dependency file changes, queue re-analysis in all consuming runs.
@@ -169,7 +169,7 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 8 — Dashboard UI / Human Task Board (frontend work)
 
-### Step 8.1 — Standalone Pages dashboard or Next.js app
+### Step 8.1 — Standalone Pages dashboard or Next.js app ✅ S39
 **Files:** `dashboard-ui/` (new) or `src/dashboard/*.html` extensions
 - Add a login page that accepts a JWT token and stores it in `localStorage`.
 - Add a tenant selector (list tenants from a new `GET /api/v1/tenants` endpoint — admin-only).
@@ -178,7 +178,7 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 - Add a finding detail page with commit SHA input, human sign-off button, and WebSocket live updates.
 - **Acceptance:** Playwright snapshot tests cover login, audit list, task board, and finding sign-off.
 
-### Step 8.2 — Backend endpoints for the UI
+### Step 8.2 — Backend endpoints for the UI ✅ S39
 **Files:** `src/lib/router.ts`, `src/index.ts`, `src/lib/auth.ts`
 - `GET /api/v1/tenants` (admin only, uses `ADMIN_EMAIL`/`ADMIN_PASSWORD`).
 - `GET /api/v1/tenants/:tenantId/audits`.
@@ -190,15 +190,15 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 9 — OAuth + Git Provider Webhooks (needs apps/secrets)
 
-### Step 9.1 — GitHub OAuth
-**Files:** `src/lib/auth.ts`, `src/index.ts`, `src/lib/router.ts`, `wrangler.toml`
+### Step 9.1 — GitHub OAuth ✅ S40
+**Files:** `src/lib/auth.ts`, `src/lib/token-crypto.ts`, `src/index.ts`, `src/lib/router.ts`, `wrangler.toml`
 - Add `GET /auth/github` redirect and `GET /auth/github/callback` handlers.
 - Exchange code for token using `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` (new secrets) and store the token in `tenants.github_token` (encrypted at rest with a new `ENCRYPTION_KEY` secret, or use Cloudflare Secrets Store if available).
 - Update `verifyTask` to use the tenant-specific token first, falling back to `env.GITHUB_TOKEN`.
 - **Acceptance:** tests mock the GitHub OAuth exchange and token storage.
 
-### Step 9.2 — GitLab / Bitbucket support
-**Files:** `src/lib/github.ts` (rename to `src/lib/git-providers.ts`?), `src/workers/verification.ts`, `src/workers/ingestion.ts`, `src/index.ts`
+### Step 9.2 — GitLab / Bitbucket support ✅ S40
+**Files:** `src/lib/git-router.ts`, `src/lib/github.ts`, `src/lib/gitlab.ts`, `src/lib/bitbucket.ts`, `src/workers/verification.ts`, `src/workers/ingestion.ts`, `src/index.ts`, `wrangler.toml`
 - Add `GitLabVerifier` and `BitbucketVerifier` implementing the same interface as GitHub verification.
 - Support GitLab zipball URL and API, Bitbucket archive URL and API.
 - Add `/auth/gitlab/callback` and `/webhooks/gitlab`, `/webhooks/bitbucket`.
@@ -208,13 +208,13 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 10 — Cloudflare AI Gateway / Managed Memory (optional, verify API)
 
-### Step 10.1 — AI Gateway routing
-**Files:** `src/lib/llm-gateway.ts`, `wrangler.toml`, `test/model-router.test.ts`
-- Add optional `AI_GATEWAY_URL` var. If present, `llmCall` fetches the provider endpoint through the gateway URL (Cloudflare AI Gateway format: `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/...`).
-- If absent, keep the current direct provider calls.
-- **Acceptance:** tests with and without `AI_GATEWAY_URL` verify the correct URL is used.
+### Step 10.1 — AI Gateway routing ✅ S41
+**Files:** `src/types/index.ts`, `wrangler.toml`, `src/lib/llm-gateway.ts`, `test/llm-gateway.test.ts`
+- Added optional `AI_GATEWAY_URL` var. When set, `buildEndpoint()` routes through the gateway; when unset, direct provider calls are preserved.
+- The exact gateway path prefix is marked `// TODO: VERIFY CLOUDFLARE API — DO NOT GUESS` because the documented format is unconfirmed.
+- **Acceptance:** `test/llm-gateway.test.ts` verifies both gateway and direct endpoint construction.
 
-### Step 10.2 — Managed Agent Memory (if supported)
+### Step 10.2 — Managed Agent Memory (if supported) ⚠️
 - **VERIFY CLOUDFLARE API:** before writing code, confirm whether the Cloudflare Agent Memory binding is available in the target Workers runtime and whether it supports the required read/write RPC. If it does, add an `AGENT_MEMORY` binding and a `src/lib/agent-memory.ts` wrapper that mirrors the current `SharedMemoryDurableObject` interface. If not, keep the custom DO.
 - **Acceptance:** fall back to `SharedMemoryDurableObject` when the binding is absent.
 
@@ -222,28 +222,29 @@ This plan covers every **Partially implemented** and **Not implemented** item fr
 
 ## Phase 11 — Performance, Load, Docs, Security
 
-### Step 11.1 — Performance/caching layer
-**Files:** `src/lib/cache.ts` (new), `src/lib/gate.ts`, `src/lib/r2-storage.ts`, `src/lib/llm-gateway.ts`
-- Add a small in-DO or KV-based cache for R2 evidence reads and LLM provider metadata. Since KV is not currently bound, either bind `CACHE_KV` or use a short-lived `Map` inside `AgentDurableObject` for repeated chunk reads within one tick.
-- **Acceptance:** a benchmark test shows fewer R2 `get` calls for repeated evidence checks on the same file.
+### Step 11.1 — Performance/caching layer ✅ S41
+**Files:** `src/types/index.ts`, `src/lib/cache.ts` (new), `src/lib/gate.ts`, `src/agents/base-agent.ts`, `test/cache.test.ts`
+- Added a small `LRUCache` inside `AgentDurableObject` and threaded it through `tick()` into `GateContext.chunkCache` so repeated R2 evidence reads for the same chunk are served from memory within one agent tick.
+- **Acceptance:** `test/cache.test.ts` verifies cache hit/miss/eviction; `evidenceInR2()` writes back to the cache.
 
-### Step 11.2 — Load testing harness
-**Files:** `scripts/load-test.ts` (new), `package.json`, `vitest.config.ts`
-- Script that creates N tenants, starts audits, opens WebSocket connections, and reports P95 latency, error rate, and token cost over a configurable duration.
-- Run it against a staging deployment, not the production worker.
-- **Acceptance:** script completes a 10-tenant / 100-WS / 1-minute smoke test without crashing.
+### Step 11.2 — Load testing harness ✅ S41
+**Files:** `scripts/load-test.ts` (new), `package.json`, `test/load-test.test.ts`
+- Script creates N tenants, starts audits, opens WebSocket connections, and reports P95 latency, error rate, and dashboard message counts over a configurable duration.
+- Runs against a staging deployment (`STAGING_URL`) using a configurable `JWT_SECRET`.
+- **Acceptance:** `npm run load-test` completes; `test/load-test.test.ts` runs a mocked dry-run to ensure the harness does not crash.
 
-### Step 11.3 — OpenAPI / API documentation
-**Files:** `openapi.yaml` or `src/lib/openapi.ts` (new), `src/index.ts`
-- Generate/serve an OpenAPI 3.1 document describing the authenticated REST endpoints.
-- Expose it at `/api/v1/openapi.json` (public or admin-only).
-- **Acceptance:** the spec validates with `swagger-parser` and matches the actual router paths.
+### Step 11.3 — OpenAPI / API documentation ✅ S41
+**Files:** `src/lib/openapi.ts` (new), `src/lib/router.ts`, `src/index.ts`, `test/openapi.test.ts`
+- Added an OpenAPI 3.1 document describing the authenticated REST endpoints, security schemes, and core schemas.
+- Served publicly at `GET /api/v1/openapi.json`.
+- **Acceptance:** `test/openapi.test.ts` verifies the endpoint returns the expected spec and that every declared path has a security scheme where required.
 
-### Step 11.4 — Security audit / onboarding wizard
-**Files:** `scripts/security-audit.ts` (new), `dashboard-ui/` or `src/dashboard/onboarding.html` (new)
-- Security script: scan codebase for direct fetch to provider endpoints (should only be in `llm-gateway.ts`), secret literals, and missing auth checks.
-- Onboarding wizard: a step-by-step UI that creates a tenant, sets repo URL, uploads/pastes a zip, and starts the first audit.
-- **Acceptance:** security script runs in CI; onboarding wizard has a Playwright test.
+### Step 11.4 — Security audit / onboarding wizard / API key settings ✅ S41 / S42
+**Files:** `scripts/security-audit.ts` (new), `test/security-audit.test.ts`, `src/dashboard/onboarding.html`, `src/dashboard/onboarding-html.ts`, `src/dashboard/settings.html`, `src/dashboard/settings-html.ts`, `src/lib/settings.ts`, `src/lib/router.ts`, `src/index.ts`, `scripts/e2e-server.ts`, `test/e2e/onboarding.spec.ts`, `test/e2e/settings.spec.ts`, `test/settings.test.ts`
+- Security script scans `src/**/*.ts` for direct provider fetches outside `src/lib/llm-gateway.ts`, hardcoded secret literals, and protected routes in `src/index.ts` that bypass authentication. It exits non-zero when issues are found.
+- Added a step-by-step onboarding wizard at `/onboarding` with links to log in, start a new audit, and view audits, plus help tooltips.
+- Added a `/settings` page where an admin can enter Kimi and Minimax API keys. Keys are encrypted at rest with `ENCRYPTION_KEY` and stored in the `app_settings` table; the LLM gateway falls back to these keys when the corresponding `wrangler secret` is not set.
+- **Acceptance:** `test/security-audit.test.ts` covers all three scanner categories and asserts the current tree has zero findings; `test/e2e/onboarding.spec.ts` and `test/e2e/settings.spec.ts` verify the pages render and match Playwright snapshots; `test/settings.test.ts` verifies encryption, decryption, masking, and admin-only access.
 
 ---
 

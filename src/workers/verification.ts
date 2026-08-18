@@ -1,22 +1,5 @@
-import type { Env, Finding, FindingVerifyResult, Task, VerifyResult } from '../types/index'
-
-export async function fetchDiff(
-  owner: string,
-  repo: string,
-  commitSha: string,
-  githubToken: string
-): Promise<unknown> {
-  const url = `https://api.github.com/repos/${owner}/${repo}/commits/${commitSha}`
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: 'application/vnd.github.v3+json',
-    },
-  })
-
-  if (res.status !== 200) return null
-  return res.json()
-}
+import type { Env, Finding, FindingVerifyResult, Task, VerifyResult, DashboardEvent, Severity } from '../types/index'
+import * as gitRouter from '../lib/git-router'
 
 function evidenceInAfterState(evidenceQuote: string, patch: string | undefined): boolean {
   if (!patch) return false
@@ -26,19 +9,52 @@ function evidenceInAfterState(evidenceQuote: string, patch: string | undefined):
   return afterLines.some(line => line.includes(quote))
 }
 
-export async function verifyTask(task: Task, env: Env): Promise<VerifyResult> {
+export async function verifyTask(
+  task: Task,
+  env: Env,
+  humanApproved: boolean = false,
+  broadcast?: (event: DashboardEvent) => void
+): Promise<VerifyResult> {
   const db = env.DB
 
-  // TODO: read owner/repo from SYSTEM_SPEC.md once the spec is filled in
-  const owner = 'OWNER'
-  const repo = 'REPO'
+  const session = await db
+    .prepare('SELECT repo_url, repo_branch FROM audit_sessions WHERE id = ?')
+    .bind(task.audit_run_id)
+    .first<{ repo_url: string; repo_branch: string }>()
 
-  const diff = await fetchDiff(owner, repo, task.commit_sha ?? '', env.GITHUB_TOKEN) as {
-    files?: Array<{ filename: string; patch?: string }>
-  } | null
+  if (!session || !session.repo_url) {
+    const reason = 'Missing repo_url'
+    await db
+      .prepare('INSERT INTO agent_errors (audit_run_id, agent_id, error_type, error_msg, file_path) VALUES (?, ?, ?, ?, ?)')
+      .bind(task.audit_run_id, 'verification-agent', 'missing_repo_url', reason, task.task_id)
+      .run()
+    return { result: 'failed', reason }
+  }
 
-  if (!diff) {
-    return { result: 'failed', reason: 'Could not fetch commit diff.' }
+  const parsed = gitRouter.parseRepoUrl(session.repo_url, session.repo_branch)
+  if (!parsed) {
+    const reason = `Unsupported repo_url: ${session.repo_url}`
+    await db
+      .prepare('INSERT INTO agent_errors (audit_run_id, agent_id, error_type, error_msg, file_path) VALUES (?, ?, ?, ?, ?)')
+      .bind(task.audit_run_id, 'verification-agent', 'unsupported_repo_url', reason, task.task_id)
+      .run()
+    return { result: 'failed', reason }
+  }
+
+  let diffFiles: Array<{ filename: string; patch?: string }> | undefined
+  if (!humanApproved) {
+    diffFiles = (await gitRouter.fetchDiff(
+      session.repo_url,
+      parsed.owner,
+      parsed.repo,
+      task.commit_sha ?? '',
+      task.tenant_id ?? '',
+      env
+    )) ?? undefined
+
+    if (!diffFiles) {
+      return { result: 'failed', reason: 'Could not fetch commit diff.' }
+    }
   }
 
   const findingIds: string[] = JSON.parse(task.finding_ids)
@@ -52,9 +68,25 @@ export async function verifyTask(task: Task, env: Env): Promise<VerifyResult> {
   }
 
   const findingResults: FindingVerifyResult[] = []
+  const resolvedFindings: Finding[] = []
 
   for (const finding of findings) {
-    const fileDiff = diff.files?.find(f => f.filename === finding.file)
+    if (humanApproved) {
+      findingResults.push({
+        finding_id: finding.finding_id,
+        resolved: true,
+        reason: 'human approved',
+      })
+      await db
+        .prepare('UPDATE findings SET status = ?, verified_at = unixepoch() WHERE finding_id = ?')
+        .bind('resolved', finding.finding_id)
+        .run()
+      resolvedFindings.push(finding)
+      await propagateResolvedFinding(finding, task.audit_run_id, db, broadcast)
+      continue
+    }
+
+    const fileDiff = diffFiles?.find(f => f.filename === finding.file)
 
     if (!fileDiff) {
       findingResults.push({
@@ -83,6 +115,8 @@ export async function verifyTask(task: Task, env: Env): Promise<VerifyResult> {
         .prepare('UPDATE findings SET status = ?, verified_at = unixepoch() WHERE finding_id = ?')
         .bind('resolved', finding.finding_id)
         .run()
+      resolvedFindings.push(finding)
+      await propagateResolvedFinding(finding, task.audit_run_id, db, broadcast)
     }
   }
 
@@ -96,8 +130,8 @@ export async function verifyTask(task: Task, env: Env): Promise<VerifyResult> {
     result = 'needs_revision'
   }
 
-  if (result === 'resolved') {
-    await scheduleRegressionScan(task.audit_run_id, findingIds, env)
+  if (result === 'resolved' && !humanApproved) {
+    await scheduleRegressionScan(task, resolvedFindings, env, broadcast)
   }
 
   return { result, finding_results: findingResults }
@@ -131,34 +165,196 @@ export async function recalcProductionScore(auditRunId: string, db: D1Database):
     .run()
 }
 
-export async function escalateSeverity(findingId: string, db: D1Database): Promise<void> {
-  const row = await db
-    .prepare('SELECT severity FROM findings WHERE finding_id = ?')
-    .bind(findingId)
-    .first<{ severity: string }>()
-
-  if (!row) return
-
-  const ladder: Record<string, string> = {
+export function escalateSeverityValue(severity: Severity): Severity {
+  const ladder: Record<Severity, Severity> = {
     info: 'low',
     low: 'medium',
     medium: 'high',
     high: 'critical',
     critical: 'critical',
   }
+  return ladder[severity] ?? severity
+}
 
-  const next = ladder[row.severity] ?? row.severity
+export async function escalateSeverity(findingId: string, db: D1Database): Promise<void> {
+  const row = await db
+    .prepare('SELECT severity FROM findings WHERE finding_id = ?')
+    .bind(findingId)
+    .first<{ severity: Severity }>()
+
+  if (!row) return
+
+  const next = escalateSeverityValue(row.severity)
   await db
     .prepare('UPDATE findings SET severity = ? WHERE finding_id = ?')
     .bind(next, findingId)
     .run()
 }
 
-// STUB — implemented when regression scanning is wired up
 async function scheduleRegressionScan(
-  auditRunId: string,
-  findingIds: string[],
-  env: Env
+  task: Task,
+  resolvedFindings: Finding[],
+  env: Env,
+  broadcast?: (event: DashboardEvent) => void
 ): Promise<void> {
-  // no-op stub
+  if (resolvedFindings.length === 0) return
+
+  const db = env.DB
+  const session = await db
+    .prepare('SELECT repo_url, repo_branch FROM audit_sessions WHERE id = ?')
+    .bind(task.audit_run_id)
+    .first<{ repo_url: string; repo_branch: string }>()
+
+  if (!session?.repo_url || !task.commit_sha) return
+
+  const parsed = gitRouter.parseRepoUrl(session.repo_url, session.repo_branch)
+  if (!parsed) return
+
+  for (const finding of resolvedFindings) {
+    const content = await gitRouter.fetchFileContent(
+      session.repo_url,
+      parsed.owner,
+      parsed.repo,
+      finding.file,
+      task.commit_sha,
+      task.tenant_id ?? '',
+      env
+    )
+    if (content === null) continue
+
+    if (content.includes(finding.evidence_quote.trim())) {
+      const newSeverity = escalateSeverityValue(finding.severity)
+      const regressionId = `regression-${finding.finding_id}-${Date.now()}`
+      await db
+        .prepare(`
+          INSERT INTO findings (
+            finding_id, tenant_id, audit_run_id, agent_id, agent_type, severity, category,
+            file, line_range_start, line_range_end, evidence_quote, description,
+            impact, verified_by, source, status, recurrence_count, is_regression, ts, verified_at, screenshot_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .bind(
+          regressionId,
+          finding.tenant_id ?? '',
+          finding.audit_run_id,
+          finding.agent_id,
+          finding.agent_type,
+          newSeverity,
+          finding.category,
+          finding.file,
+          finding.line_range?.[0] ?? null,
+          finding.line_range?.[1] ?? null,
+          finding.evidence_quote,
+          `Regression: ${finding.description}`,
+          finding.impact,
+          JSON.stringify(finding.verified_by),
+          'regression',
+          'open',
+          (finding.recurrence_count ?? 0) + 1,
+          1,
+          Date.now(),
+          null,
+          finding.screenshot_id
+        )
+        .run()
+
+      await db
+        .prepare('INSERT INTO audit_logs (tenant_id, audit_run_id, agent_id, event_type, event_data) VALUES (?, ?, ?, ?, ?)')
+        .bind(
+          finding.tenant_id ?? '',
+          finding.audit_run_id,
+          finding.agent_id,
+          'regression_found',
+          JSON.stringify({ original_finding_id: finding.finding_id, regression_finding_id: regressionId, file: finding.file, severity: newSeverity })
+        )
+        .run()
+
+      broadcast?.({
+        type: 'finding_created',
+        audit_run_id: finding.audit_run_id,
+        payload: {
+          finding_id: regressionId,
+          source: 'regression',
+          original_finding_id: finding.finding_id,
+          file: finding.file,
+          severity: newSeverity,
+        },
+        ts: Date.now(),
+      })
+    }
+  }
+}
+
+async function propagateResolvedFinding(
+  finding: Finding,
+  providerRunId: string,
+  db: D1Database,
+  broadcast?: (event: DashboardEvent) => void
+): Promise<void> {
+  const dependencies = await db
+    .prepare('SELECT consumer_run_id, tenant_id FROM repo_dependencies WHERE provider_run_id = ? AND dependency_path = ?')
+    .bind(providerRunId, finding.file)
+    .all<{ consumer_run_id: string; tenant_id: string }>()
+
+  for (const dep of dependencies.results ?? []) {
+    const consumerFindings = await db
+      .prepare(`
+        SELECT finding_id FROM findings
+        WHERE audit_run_id = ? AND file = ? AND status IN ('open','in_progress','in_review')
+      `)
+      .bind(dep.consumer_run_id, finding.file)
+      .all<{ finding_id: string }>()
+
+    const consumerFindingIds = (consumerFindings.results ?? []).map(r => r.finding_id)
+    if (consumerFindingIds.length === 0) continue
+
+    const taskId = `propagate-${finding.finding_id}-${dep.consumer_run_id}-${Date.now()}`
+    await db
+      .prepare(`
+        INSERT INTO tasks (task_id, tenant_id, audit_run_id, title, finding_ids, priority_score, multipliers, status, assigned_agent, created_at, updated_at, conflict_flag)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch(), ?)
+      `)
+      .bind(
+        taskId,
+        dep.tenant_id,
+        dep.consumer_run_id,
+        `Verify propagated fix from ${providerRunId}`,
+        JSON.stringify(consumerFindingIds),
+        50,
+        JSON.stringify(['cross_repo_propagation']),
+        'backlog',
+        null,
+        0
+      )
+      .run()
+
+    await db
+      .prepare('INSERT INTO audit_logs (tenant_id, audit_run_id, agent_id, event_type, event_data) VALUES (?, ?, ?, ?, ?)')
+      .bind(
+        dep.tenant_id,
+        dep.consumer_run_id,
+        null,
+        'cross_repo_propagation',
+        JSON.stringify({
+          provider_run_id: providerRunId,
+          consumer_run_id: dep.consumer_run_id,
+          source_finding_id: finding.finding_id,
+          propagated_task_id: taskId,
+          file: finding.file,
+        })
+      )
+      .run()
+
+    broadcast?.({
+      type: 'task_created',
+      audit_run_id: dep.consumer_run_id,
+      payload: {
+        task_id: taskId,
+        source: 'cross_repo_propagation',
+        provider_run_id: providerRunId,
+        file: finding.file,
+      },
+      ts: Date.now(),
+    })
+  }
 }

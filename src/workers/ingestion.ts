@@ -1,7 +1,7 @@
 import type { Env } from '../types/index'
 import { uploadChunk } from '../lib/r2-storage'
 import { extractZipFiles, type RepoFile } from '../lib/zip'
-import { fetchRepoFiles } from '../lib/github'
+import { getRepoFiles } from '../lib/git-router'
 import { detectLanguage } from '../lib/lang'
 
 interface ManifestEntry {
@@ -60,7 +60,7 @@ export function tagDomain(filePath: string): string {
   return 'all'
 }
 
-async function sha256ContentHash(content: string): Promise<string> {
+export async function sha256ContentHash(content: string): Promise<string> {
   const data = new TextEncoder().encode(content)
   const hash = await crypto.subtle.digest('SHA-256', data)
   return Array.from(new Uint8Array(hash))
@@ -134,6 +134,46 @@ export async function writeFiles(
   }
 }
 
+export async function upsertFiles(
+  tenantId: string,
+  auditRunId: string,
+  files: ManifestEntry[],
+  db: D1Database
+): Promise<void> {
+  const statements = files.map(file =>
+    db
+      .prepare(`
+        INSERT INTO files (
+          tenant_id, audit_run_id, path, language, domain_tag, line_count,
+          chunk_count, r2_key, last_analyzed_at, content_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), ?, unixepoch())
+        ON CONFLICT(tenant_id, audit_run_id, path) DO UPDATE SET
+          language = excluded.language,
+          domain_tag = excluded.domain_tag,
+          line_count = excluded.line_count,
+          chunk_count = excluded.chunk_count,
+          r2_key = excluded.r2_key,
+          last_analyzed_at = unixepoch(),
+          content_hash = excluded.content_hash
+      `)
+      .bind(
+        tenantId,
+        auditRunId,
+        file.filePath,
+        file.language,
+        file.domain,
+        file.lineCount,
+        file.chunkCount,
+        file.r2Key,
+        file.contentHash
+      )
+  )
+
+  if (statements.length > 0) {
+    await db.batch(statements)
+  }
+}
+
 export async function createRunBudget(
   tenantId: string,
   auditRunId: string,
@@ -170,7 +210,24 @@ async function ensureAuditSession(
     .run()
 }
 
-async function processRepoFile(
+async function ensureRepoGroupMembership(
+  tenantId: string,
+  groupId: string,
+  auditRunId: string,
+  db: D1Database
+): Promise<void> {
+  await db
+    .prepare('INSERT OR IGNORE INTO repo_groups (group_id, tenant_id, name, created_at) VALUES (?, ?, ?, unixepoch())')
+    .bind(groupId, tenantId, groupId)
+    .run()
+
+  await db
+    .prepare('INSERT OR IGNORE INTO repo_group_members (group_id, audit_run_id, role) VALUES (?, ?, ?)')
+    .bind(groupId, auditRunId, 'service')
+    .run()
+}
+
+export async function processRepoFile(
   tenantId: string,
   auditRunId: string,
   file: RepoFile,
@@ -217,9 +274,10 @@ interface ParsedRepoFiles {
   repoUrl?: string
   branch?: string
   commitSha?: string
+  repoGroupId?: string
 }
 
-async function parseRepoFiles(request: Request, env: Env): Promise<ParsedRepoFiles | Response> {
+async function parseRepoFiles(request: Request, env: Env, tenantId: string): Promise<ParsedRepoFiles | Response> {
   const contentType = request.headers.get('Content-Type') ?? ''
 
   if (contentType.includes('multipart/form-data')) {
@@ -237,7 +295,8 @@ async function parseRepoFiles(request: Request, env: Env): Promise<ParsedRepoFil
     const repoUrl = formData.get('repo_url') as string | null
     const branch = formData.get('branch') as string | null
     const commitSha = formData.get('commit_sha') as string | null
-    return { auditRunId, files, repoUrl: repoUrl ?? undefined, branch: branch ?? undefined, commitSha: commitSha ?? undefined }
+    const repoGroupId = formData.get('repo_group_id') as string | null
+    return { auditRunId, files, repoUrl: repoUrl ?? undefined, branch: branch ?? undefined, commitSha: commitSha ?? undefined, repoGroupId: repoGroupId ?? undefined }
   }
 
   // JSON body: either { repo_url, branch? } or { audit_run_id, files: [...] }
@@ -257,9 +316,18 @@ async function parseRepoFiles(request: Request, env: Env): Promise<ParsedRepoFil
   if (b.repo_url && typeof b.repo_url === 'string') {
     const branch = typeof b.branch === 'string' ? b.branch : undefined
     const commitSha = typeof b.commit_sha === 'string' ? b.commit_sha : undefined
-    const files = await fetchRepoFiles(b.repo_url, branch, env.GITHUB_TOKEN)
-    const auditRunId = typeof b.audit_run_id === 'string' ? b.audit_run_id : `github-${Date.now()}`
-    return { auditRunId, files, repoUrl: b.repo_url, branch, commitSha }
+    const repoGroupId = typeof b.repo_group_id === 'string' ? b.repo_group_id : undefined
+    try {
+      const files = await getRepoFiles(b.repo_url, branch, tenantId, env)
+      const auditRunId = typeof b.audit_run_id === 'string' ? b.audit_run_id : `github-${Date.now()}`
+      return { auditRunId, files, repoUrl: b.repo_url, branch, commitSha, repoGroupId }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to fetch repository files'
+      return new Response(JSON.stringify({ error: msg }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
   }
 
   if (!b.audit_run_id || typeof b.audit_run_id !== 'string') {
@@ -283,8 +351,9 @@ async function parseRepoFiles(request: Request, env: Env): Promise<ParsedRepoFil
   const repoUrl = typeof b.repo_url === 'string' ? b.repo_url : undefined
   const branch = typeof b.branch === 'string' ? b.branch : undefined
   const commitSha = typeof b.commit_sha === 'string' ? b.commit_sha : undefined
+  const repoGroupId = typeof b.repo_group_id === 'string' ? b.repo_group_id : undefined
 
-  return { auditRunId: b.audit_run_id, files, repoUrl, branch, commitSha }
+  return { auditRunId: b.audit_run_id, files, repoUrl, branch, commitSha, repoGroupId }
 }
 
 async function broadcastRepoReady(
@@ -317,12 +386,12 @@ export default {
 
     const tenantId = getTenantId(request)
 
-    const parsed = await parseRepoFiles(request, env)
+    const parsed = await parseRepoFiles(request, env, tenantId)
     if (parsed instanceof Response) {
       return parsed
     }
 
-    const { auditRunId, files, repoUrl, branch, commitSha } = parsed
+    const { auditRunId, files, repoUrl, branch, commitSha, repoGroupId } = parsed
 
     if (files.length === 0) {
       return new Response('No valid files to ingest', { status: 400 })
@@ -341,6 +410,9 @@ export default {
     await writeFiles(tenantId, auditRunId, manifestEntries, env.DB)
     await createRunBudget(tenantId, auditRunId, 5.0, env.DB)
     await ensureAuditSession(tenantId, auditRunId, manifestEntries.length, env.DB, repoUrl, branch, commitSha)
+    if (repoGroupId) {
+      await ensureRepoGroupMembership(tenantId, repoGroupId, auditRunId, env.DB)
+    }
     await broadcastRepoReady(tenantId, auditRunId, manifestEntries.length, env.DASHBOARD_DO)
 
     const response: IngestionResponseBody = {

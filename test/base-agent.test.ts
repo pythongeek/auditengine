@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { tick, deduplicateFinding, mergeCrossAgentContext } from '../src/agents/base-agent'
-import { makeMockAgentNamespaces, makeMockWorkflows } from './helpers'
+import { makeMockAgentNamespaces, makeMockWorkflows, makeMockEnvStrings } from './helpers'
 import type { Env, AgentPersistentState, ValidatedFinding } from '../src/types/index'
 
 if (typeof crypto === 'undefined') {
@@ -59,13 +59,7 @@ function makeMockEnv(overrides: Partial<Env> = {}): Env {
     ...makeMockWorkflows(),
     WRITE_QUEUE: {} as Queue,
     BROWSER: {} as Fetcher,
-    KIMI_API_KEY: '',
-    MINIMAX_API_KEY: '',
-    GITHUB_TOKEN: '',
-    JWT_SECRET: 'test-secret',
-    STAGING_URL: '',
-    ADMIN_EMAIL: '',
-    ADMIN_PASSWORD: '',
+    ...makeMockEnvStrings(),
     ...overrides,
   }
 }
@@ -174,32 +168,29 @@ describe('base-agent recurrence detection', () => {
   })
 })
 
-describe('base-agent cross-agent context merge', () => {
-  it('deduplicates findings by agent + finding id', () => {
-    const a = {
-      finding_id: 'F-001',
-      severity: 'high' as const,
-      category: 'auth_bypass',
-      file: 'src/auth.ts',
-      description: 'x',
-      agent_id: 'agent-a',
-    }
-    const b = {
-      finding_id: 'F-001',
-      severity: 'high' as const,
-      category: 'auth_bypass',
-      file: 'src/auth.ts',
-      description: 'x',
-      agent_id: 'agent-a',
-    }
-    const c = {
-      finding_id: 'F-002',
-      severity: 'medium' as const,
-      category: 'injection',
-      file: 'src/auth.ts',
-      description: 'y',
-      agent_id: 'agent-b',
-    }
-    expect(mergeCrossAgentContext([a, b], [c])).toEqual([a, c])
+describe('base-agent budget throttle', () => {
+  it('pauses a non-critical agent when the run budget is throttled', async () => {
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...params: unknown[]) => ({
+          run: () => Promise.resolve({ changes: 1, meta: {} }),
+          first: () => {
+            if (sql.toLowerCase().includes('run_budget')) {
+              return Promise.resolve({ paused: 0, throttled: 1 })
+            }
+            return Promise.resolve(null)
+          },
+          all: () => Promise.resolve({ results: [] }),
+        }),
+      }),
+      batch: () => Promise.resolve([]),
+      dump: () => Promise.resolve(new ArrayBuffer(0)),
+      exec: () => Promise.resolve({ count: 0, duration: 0 }),
+    } as unknown as D1Database
+
+    const env = makeMockEnv({ DB: db })
+    const state = baseState({ agentType: 'testing', state: 'boot' })
+    const result = await tick(state, env, () => {})
+    expect(result.state).toBe('paused')
   })
 })

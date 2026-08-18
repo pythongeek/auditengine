@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Onboarding — AuditEngine</title>
+  <style>
+    :root {
+      --bg: #111;
+      --text: #e5e5e5;
+      --muted: #888;
+      --card: #1a1a1a;
+      --border: #333;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    nav {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    nav .brand { font-weight: 700; font-size: 1.2rem; }
+    nav a { color: var(--text); text-decoration: none; margin-left: 1rem; }
+    nav a:hover { color: var(--accent); }
+    main {
+      max-width: 840px;
+      margin: 0 auto;
+      padding: 3rem 1.5rem;
+    }
+    h1 { font-size: 2rem; margin: 0 0 0.5rem 0; }
+    .subtitle { color: var(--muted); margin-bottom: 2rem; }
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+    .step {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+    }
+    .step h2 { margin: 0 0 0.75rem 0; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem; }
+    .number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+    .step p { margin: 0 0 1rem 0; color: var(--text); }
+    .tip {
+      margin-top: auto;
+      padding-top: 1rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+    }
+    .actions { margin-top: 2rem; }
+    .btn {
+      display: inline-block;
+      padding: 0.75rem 1.5rem;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .btn:hover { background: var(--accent-hover); }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="brand">AuditEngine</div>
+    <div>
+      <a href="/">Home</a>
+      <a href="/audit/new">New Audit</a>
+      <a href="/login">Log in</a>
+    </div>
+  </nav>
+
+  <main>
+    <h1>Welcome to AuditEngine</h1>
+    <p class="subtitle">Complete these three steps to run your first multi-agent codebase audit.</p>
+
+    <div class="steps">
+      <div class="step">
+        <h2><span class="number">1</span>Log in</h2>
+        <p>Paste the JWT token issued by your administrator. The token is scoped to a tenant and expires after one hour by default.</p>
+        <div class="tip">Tip: lost your token? Ask an admin to issue a new one for your tenant.</div>
+        <div class="actions">
+          <a class="btn" href="/login">Log in</a>
+        </div>
+      </div>
+      <div class="step">
+        <h2><span class="number">2</span>Connect a repository</h2>
+        <p>Choose a tenant, then upload a zip, paste files, or provide a public GitHub URL. OAuth can be connected per tenant for private repositories.</p>
+        <div class="tip">Tip: start with a small repo to see the full pipeline quickly.</div>
+        <div class="actions">
+          <a class="btn" href="/audit/new">Start new audit</a>
+        </div>
+      </div>
+      <div class="step">
+        <h2><span class="number">3</span>Track results</h2>
+        <p>Watch the live dashboard, task board, and findings view while agents analyze files in parallel.</p>
+        <div class="tip">Tip: mark tasks done only after providing the commit SHA that resolves the finding.</div>
+        <div class="actions">
+          <a class="btn" href="/audits">View audits</a>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

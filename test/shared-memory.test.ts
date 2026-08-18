@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { SharedMemoryDurableObject } from '../src/workers/shared-memory'
-import { makeMockAgentNamespaces, makeMockWorkflows } from './helpers'
+import { makeMockAgentNamespaces, makeMockWorkflows, makeMockEnvStrings } from './helpers'
 import type { Env } from '../src/types/index'
 
 if (typeof crypto === 'undefined') {
@@ -40,13 +40,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     ...makeMockWorkflows(),
     WRITE_QUEUE: {} as Queue,
     BROWSER: {} as Fetcher,
-    KIMI_API_KEY: '',
-    MINIMAX_API_KEY: '',
-    GITHUB_TOKEN: '',
-    JWT_SECRET: 'test-secret',
-    STAGING_URL: '',
-    ADMIN_EMAIL: '',
-    ADMIN_PASSWORD: '',
+    ...makeMockEnvStrings(),
     ...overrides,
   }
 }

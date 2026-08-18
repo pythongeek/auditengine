@@ -1,4 +1,9 @@
 import { extractZipFiles, type RepoFile } from './zip'
+import { getTenantProviderToken, type ProviderName } from './token-crypto'
+import { getGitProviderToken } from './settings'
+import type { Env } from '../types/index'
+
+const PROVIDER: ProviderName = 'github'
 
 export interface RepoUrlParts {
   owner: string
@@ -6,11 +11,15 @@ export interface RepoUrlParts {
   ref: string
 }
 
-export function parseRepoUrl(repoUrl: string): RepoUrlParts | null {
+export function parseRepoUrl(repoUrl: string, branch?: string): RepoUrlParts | null {
   const normalized = repoUrl.replace(/\.git$/, '')
+  const treeMatch = normalized.match(/github\.com[:/]([^/]+)\/([^/]+)\/tree\/([^/]+)\/?$/)
+  if (treeMatch) {
+    return { owner: treeMatch[1], repo: treeMatch[2], ref: treeMatch[3] }
+  }
   const match = normalized.match(/github\.com[:/]([^/]+)\/([^/]+)\/?$/)
   if (!match) return null
-  return { owner: match[1], repo: match[2], ref: 'HEAD' }
+  return { owner: match[1], repo: match[2], ref: branch || 'HEAD' }
 }
 
 export async function fetchRepoFiles(
@@ -31,6 +40,7 @@ export async function fetchRepoFiles(
       Authorization: `Bearer ${githubToken}`,
       Accept: 'application/vnd.github.v3+json',
       'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'AuditEngine/1.0',
     },
   })
 
@@ -60,4 +70,54 @@ function findCommonPrefix(paths: string[]): string | null {
   const candidate = first.slice(0, slashIdx + 1)
   if (paths.every(p => p.startsWith(candidate))) return candidate
   return null
+}
+
+export async function fetchFileContent(
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+  githubToken: string
+): Promise<string | null> {
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/')
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${githubToken}`,
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'AuditEngine/1.0',
+    },
+  })
+
+  if (res.status !== 200) return null
+  const data = await res.json() as { content?: string; encoding?: string }
+  if (data.encoding === 'base64' && data.content) {
+    return atob(data.content.replace(/\n/g, ''))
+  }
+  return null
+}
+
+export async function fetchDiff(
+  owner: string,
+  repo: string,
+  commitSha: string,
+  githubToken: string
+): Promise<unknown> {
+  const url = `https://api.github.com/repos/${owner}/${repo}/commits/${commitSha}`
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${githubToken}`,
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'AuditEngine/1.0',
+    },
+  })
+
+  if (res.status !== 200) return null
+  return res.json()
+}
+
+export async function getTokenForTenant(db: D1Database, tenantId: string, env: Env): Promise<string> {
+  const tenantToken = await getTenantProviderToken(db, tenantId, PROVIDER, env.ENCRYPTION_KEY)
+  if (tenantToken) return tenantToken
+  return (await getGitProviderToken(db, PROVIDER, env.ENCRYPTION_KEY, env.GITHUB_TOKEN)) ?? ''
 }

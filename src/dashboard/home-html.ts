@@ -81,8 +81,11 @@ export const HOME_HTML = `<!DOCTYPE html>
     <div class="brand">AuditEngine</div>
     <div>
       <a href="/">Home</a>
+      <a href="/repos">Repos</a>
+      <a href="/audits">Audits</a>
       <a href="/audit/new">New Audit</a>
       <a href="/dashboard">Dashboard</a>
+      <a href="/settings">Settings</a>
     </div>
   </nav>
 

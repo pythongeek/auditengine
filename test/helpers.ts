@@ -34,13 +34,14 @@ export function makeMockAgentNamespaces(): Pick<Env,
 }
 
 export function makeMockWorkflows(): Pick<Env,
-  'PRIORITY_RESOLVER_WORKFLOW' | 'SALVATION_WORKFLOW' | 'CONTINUOUS_AUDIT_WORKFLOW'
+  'PRIORITY_RESOLVER_WORKFLOW' | 'SALVATION_WORKFLOW' | 'CONTINUOUS_AUDIT_WORKFLOW' | 'AUDIT_START_WORKFLOW'
 > {
   const create = async () => Promise.resolve({} as WorkflowInstance)
   return {
     PRIORITY_RESOLVER_WORKFLOW: { create } as unknown as Workflow,
     SALVATION_WORKFLOW: { create } as unknown as Workflow,
     CONTINUOUS_AUDIT_WORKFLOW: { create } as unknown as Workflow,
+    AUDIT_START_WORKFLOW: { create } as unknown as Workflow,
   }
 }
 
@@ -93,6 +94,49 @@ export function makeGateContext(overrides: Partial<GateContext> = {}): GateConte
     currentFileContent: content,
     r2: overrides.r2 ?? makeMockR2(content),
     claimLog: new Set(),
+    ...overrides,
+  }
+}
+
+export function makeMockEnvStrings(
+  overrides: Partial<Pick<Env,
+    | 'KIMI_API_KEY' | 'MINIMAX_API_KEY' | 'GITHUB_TOKEN'
+    | 'GITHUB_CLIENT_ID' | 'GITHUB_CLIENT_SECRET' | 'GITHUB_WEBHOOK_SECRET'
+    | 'GITLAB_TOKEN' | 'GITLAB_CLIENT_ID' | 'GITLAB_CLIENT_SECRET' | 'GITLAB_WEBHOOK_SECRET'
+    | 'BITBUCKET_TOKEN' | 'BITBUCKET_CLIENT_ID' | 'BITBUCKET_CLIENT_SECRET' | 'BITBUCKET_WEBHOOK_SECRET'
+    | 'ENCRYPTION_KEY' | 'JWT_SECRET' | 'STAGING_URL'
+    | 'ADMIN_EMAIL' | 'ADMIN_PASSWORD' | 'SEARCH_API_KEY' | 'SEARCH_PROVIDER'
+  >> = {}
+): Pick<Env,
+  | 'KIMI_API_KEY' | 'MINIMAX_API_KEY' | 'GITHUB_TOKEN'
+  | 'GITHUB_CLIENT_ID' | 'GITHUB_CLIENT_SECRET' | 'GITHUB_WEBHOOK_SECRET'
+  | 'GITLAB_TOKEN' | 'GITLAB_CLIENT_ID' | 'GITLAB_CLIENT_SECRET' | 'GITLAB_WEBHOOK_SECRET'
+  | 'BITBUCKET_TOKEN' | 'BITBUCKET_CLIENT_ID' | 'BITBUCKET_CLIENT_SECRET' | 'BITBUCKET_WEBHOOK_SECRET'
+  | 'ENCRYPTION_KEY' | 'JWT_SECRET' | 'STAGING_URL'
+  | 'ADMIN_EMAIL' | 'ADMIN_PASSWORD' | 'SEARCH_API_KEY' | 'SEARCH_PROVIDER'
+> {
+  return {
+    KIMI_API_KEY: '',
+    MINIMAX_API_KEY: '',
+    GITHUB_TOKEN: '',
+    GITHUB_CLIENT_ID: '',
+    GITHUB_CLIENT_SECRET: '',
+    GITHUB_WEBHOOK_SECRET: '',
+    GITLAB_TOKEN: '',
+    GITLAB_CLIENT_ID: '',
+    GITLAB_CLIENT_SECRET: '',
+    GITLAB_WEBHOOK_SECRET: '',
+    BITBUCKET_TOKEN: '',
+    BITBUCKET_CLIENT_ID: '',
+    BITBUCKET_CLIENT_SECRET: '',
+    BITBUCKET_WEBHOOK_SECRET: '',
+    ENCRYPTION_KEY: '',
+    JWT_SECRET: 'test-secret',
+    STAGING_URL: '',
+    ADMIN_EMAIL: '',
+    ADMIN_PASSWORD: '',
+    SEARCH_API_KEY: '',
+    SEARCH_PROVIDER: 'brave',
     ...overrides,
   }
 }

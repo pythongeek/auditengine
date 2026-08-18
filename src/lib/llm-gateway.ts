@@ -5,12 +5,33 @@ import { getAgentConfig } from './agent-config'
 import { redactForLLM } from './secrets'
 import { checkTokenBudget } from './token-budget'
 import { checkAgentRateLimit } from './rate-limit'
+import { getProviderApiKey } from './settings'
 
 // Provider endpoints — exact values, do not modify URLs
 const ENDPOINTS: Record<Model, string> = {
   "kimi-k3":    "https://api.moonshot.cn/v1/chat/completions",
   "kimi-k2.6":  "https://api.moonshot.cn/v1/chat/completions",
   "minimax-m3": "https://api.minimax.chat/v1/text/chatcompletion_pro",
+}
+
+function providerForModel(model: Model): Provider {
+  return model.startsWith('kimi') ? 'kimi' : 'minimax'
+}
+
+// TODO: VERIFY CLOUDFLARE API — the exact AI Gateway path prefix for kimi / minimax is unconfirmed.
+// The default layout below appends the provider name and the provider-specific path.
+// Confirm at https://developers.cloudflare.com/ai-gateway/ before enabling in production.
+export function buildEndpoint(model: Model, env: Env): string {
+  const gateway = env.AI_GATEWAY_URL
+  if (!gateway) {
+    return ENDPOINTS[model]
+  }
+  const provider = providerForModel(model)
+  const suffix = provider === 'kimi'
+    ? '/v1/chat/completions'
+    : '/v1/text/chatcompletion_pro'
+  const base = gateway.endsWith('/') ? gateway.slice(0, -1) : gateway
+  return `${base}/${provider}${suffix}`
 }
 
 // Pricing per 1,000,000 tokens in USD
@@ -117,9 +138,9 @@ export async function fetchWithRetry(
   throw new RateLimitError('Rate limited')
 }
 
-export function getApiKey(provider: Provider, env: Env): string {
-  if (provider === 'kimi') return env.KIMI_API_KEY
-  return env.MINIMAX_API_KEY
+export async function getApiKey(provider: Provider, env: Env, db: D1Database): Promise<string | null> {
+  const envValue = provider === 'kimi' ? env.KIMI_API_KEY : env.MINIMAX_API_KEY
+  return getProviderApiKey(db, provider, env.ENCRYPTION_KEY, envValue)
 }
 
 export async function llmCall(params: LLMCallParams, env: Env): Promise<NormalizedResponse> {
@@ -175,8 +196,11 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
     )
   }
 
-  const apiKey = getApiKey(finalRoute.provider, env)
-  const endpoint = ENDPOINTS[finalRoute.model]
+  const apiKey = await getApiKey(finalRoute.provider, env, db)
+  if (!apiKey) {
+    throw new Error(`No API key configured for provider ${finalRoute.provider}`)
+  }
+  const endpoint = buildEndpoint(finalRoute.model, env)
 
   const temperature = agentConfig.temperature
   const topP = agentConfig.top_p

@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { spawnAgent, getRelevantAgentsForPhase, agentNamespace } from '../src/workers/coordinator'
-import { makeMockAgentNamespaces, makeMockWorkflows } from './helpers'
-import type { Env, AgentType } from '../src/types/index'
+import { describe, it, expect, vi } from 'vitest'
+import { CoordinatorDurableObject, spawnAgent, getRelevantAgentsForPhase, agentNamespace } from '../src/workers/coordinator'
+import { makeMockAgentNamespaces, makeMockWorkflows, makeMockEnvStrings } from './helpers'
+import { ALL_AGENT_TYPES, NON_CRITICAL_AGENT_TYPES } from '../src/lib/agent-config'
+import type { Env, AgentType, DashboardEvent } from '../src/types/index'
 
 if (typeof crypto === 'undefined') {
   const { webcrypto } = await import('node:crypto')
@@ -65,15 +66,57 @@ function makeMockEnv(overrides: Partial<Env> = {}): Env {
     ...makeMockWorkflows(),
     WRITE_QUEUE: {} as Queue,
     BROWSER: {} as Fetcher,
-    KIMI_API_KEY: '',
-    MINIMAX_API_KEY: '',
-    GITHUB_TOKEN: '',
-    JWT_SECRET: 'test-secret',
-    STAGING_URL: '',
-    ADMIN_EMAIL: '',
-    ADMIN_PASSWORD: '',
+    ...makeMockEnvStrings(),
     ...overrides,
   } as Env
+}
+
+function makeMockD1ForBudget(budgetRow: Record<string, unknown> | null) {
+  const runs: { sql: string; params: unknown[] }[] = []
+  const db = {
+    prepare: (sql: string) => ({
+      bind: (...params: unknown[]) => ({
+        run: () => {
+          runs.push({ sql, params })
+          return Promise.resolve({ changes: 1, meta: {} })
+        },
+        first: () => {
+          runs.push({ sql, params })
+          const lower = sql.toLowerCase()
+          if (lower.includes('run_budget')) return Promise.resolve(budgetRow)
+          return Promise.resolve(null)
+        },
+        all: () => {
+          runs.push({ sql, params })
+          return Promise.resolve({ results: [] })
+        },
+      }),
+    }),
+    batch: () => Promise.resolve([]),
+    dump: () => Promise.resolve(new ArrayBuffer(0)),
+    exec: () => Promise.resolve({ count: 0, duration: 0 }),
+  } as unknown as D1Database
+  return { db, runs }
+}
+
+function makeMockDashboardNamespace(events: DashboardEvent[]) {
+  return {
+    idFromName: (name: string) => ({ toString: () => name }),
+    get: () => ({
+      fetch: (req: Request) => {
+        return req.json().then((body) => {
+          events.push(body as DashboardEvent)
+          return new Response('OK', { status: 200 })
+        })
+      },
+    }),
+  } as unknown as DurableObjectNamespace
+}
+
+function makeMockEnvForAlarm(db: D1Database, events: DashboardEvent[]): Env {
+  const base = makeMockEnv({ DB: db })
+  base.DASHBOARD_DO = makeMockDashboardNamespace(events)
+  return base
 }
 
 describe('coordinator domain-aware spawn', () => {
@@ -146,5 +189,158 @@ describe('coordinator agentNamespace', () => {
       expect(() => agentNamespace(agentType, env)).not.toThrow()
     }
     expect((agentNamespace('security', env) as unknown as { idFromName: unknown }).idFromName).toBeDefined()
+  })
+})
+
+describe('coordinator budget pause alarm', () => {
+  it('pauses only non-critical agents at 80% and broadcasts a scoped alert', async () => {
+    const events: DashboardEvent[] = []
+    const { db, runs } = makeMockD1ForBudget({
+      phase: 'boot',
+      alert_50_sent: 0,
+      alert_80_sent: 1,
+      alert_95_sent: 0,
+      paused: 0,
+      throttled: 1,
+      spent_usd: 4.0,
+      budget_usd: 5.0,
+    })
+    const env = makeMockEnvForAlarm(db, events)
+    const setAlarm = vi.fn()
+    const coordinator = new CoordinatorDurableObject({ storage: { setAlarm } } as unknown as DurableObjectState, env)
+    ;(coordinator as any).auditRunId = 'run-1'
+    ;(coordinator as any).tenantId = 'tenant-1'
+
+    await coordinator.alarm()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const pauseUpdate = runs.find(r =>
+      r.sql.toLowerCase().includes('update agent_registry') &&
+      r.sql.toLowerCase().includes("status = 'paused'")
+    )
+    expect(pauseUpdate).toBeDefined()
+    expect(pauseUpdate?.params[0]).toBe('run-1')
+    expect(pauseUpdate?.params.slice(1)).toEqual(NON_CRITICAL_AGENT_TYPES)
+
+    expect(events).toHaveLength(1)
+    expect(events[0].type).toBe('budget_alert')
+    expect(events[0].payload.threshold).toBe(80)
+    expect(events[0].payload.scope).toBe('non_critical')
+    expect(events[0].payload.paused_agents).toEqual(NON_CRITICAL_AGENT_TYPES)
+
+    expect(setAlarm).toHaveBeenCalledOnce()
+  })
+
+  it('pauses all agents at 95% and broadcasts an all-agents alert', async () => {
+    const events: DashboardEvent[] = []
+    const { db, runs } = makeMockD1ForBudget({
+      phase: 'boot',
+      alert_50_sent: 0,
+      alert_80_sent: 0,
+      alert_95_sent: 1,
+      paused: 1,
+      throttled: 1,
+      spent_usd: 4.75,
+      budget_usd: 5.0,
+    })
+    const env = makeMockEnvForAlarm(db, events)
+    const setAlarm = vi.fn()
+    const coordinator = new CoordinatorDurableObject({ storage: { setAlarm } } as unknown as DurableObjectState, env)
+    ;(coordinator as any).auditRunId = 'run-1'
+    ;(coordinator as any).tenantId = 'tenant-1'
+
+    await coordinator.alarm()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const pauseUpdate = runs.find(r =>
+      r.sql.toLowerCase().includes('update agent_registry') &&
+      r.sql.toLowerCase().includes("status = 'paused'")
+    )
+    expect(pauseUpdate).toBeDefined()
+    expect(pauseUpdate?.params).toEqual(['run-1'])
+
+    expect(events).toHaveLength(1)
+    expect(events[0].type).toBe('budget_alert')
+    expect(events[0].payload.threshold).toBe(95)
+    expect(events[0].payload.scope).toBe('all')
+    expect(events[0].payload.paused_agents).toEqual(ALL_AGENT_TYPES)
+
+    expect(setAlarm).toHaveBeenCalledOnce()
+  })
+})
+
+describe('coordinator task lock timeout', () => {
+  function makeMockD1ForLockTimeout(tasks: Array<{ task_id: string; status: string; lock_expires_at: number | null }>) {
+    const runs: { sql: string; params: unknown[] }[] = []
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...params: unknown[]) => ({
+          run: () => {
+            runs.push({ sql, params })
+            return Promise.resolve({ changes: 1, meta: {} })
+          },
+          first: () => {
+            runs.push({ sql, params })
+            const lower = sql.toLowerCase()
+            if (lower.includes('run_budget')) {
+              return Promise.resolve({
+                phase: 'complete',
+                alert_50_sent: 0,
+                alert_80_sent: 0,
+                alert_95_sent: 0,
+                paused: 0,
+                throttled: 0,
+                spent_usd: 0,
+                budget_usd: 5,
+              })
+            }
+            return Promise.resolve(null)
+          },
+          all: () => {
+            runs.push({ sql, params })
+            const lower = sql.toLowerCase()
+            if (lower.includes('from tasks') && lower.includes('lock_expires_at')) {
+              const now = Math.floor(Date.now() / 1000)
+              const result = tasks.filter(t => t.status === 'in_progress' && t.lock_expires_at !== null && t.lock_expires_at < now)
+              return Promise.resolve({ results: result })
+            }
+            return Promise.resolve({ results: [] })
+          },
+        }),
+      }),
+      batch: () => Promise.resolve([]),
+      dump: () => Promise.resolve(new ArrayBuffer(0)),
+      exec: () => Promise.resolve({ count: 0, duration: 0 }),
+    } as unknown as D1Database
+    return { db, runs }
+  }
+
+  it('resets in_progress tasks whose 48-hour lock has expired', async () => {
+    const events: DashboardEvent[] = []
+    const { db, runs } = makeMockD1ForLockTimeout([
+      { task_id: 'task-expired', status: 'in_progress', lock_expires_at: 1 },
+      { task_id: 'task-active', status: 'in_progress', lock_expires_at: Math.floor(Date.now() / 1000) + 3600 },
+    ])
+    const env = makeMockEnvForAlarm(db, events)
+    const setAlarm = vi.fn()
+    const coordinator = new CoordinatorDurableObject({ storage: { setAlarm } } as unknown as DurableObjectState, env)
+    ;(coordinator as any).auditRunId = 'run-1'
+    ;(coordinator as any).tenantId = 'tenant-1'
+
+    await coordinator.alarm()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const resetRuns = runs.filter(r =>
+      r.sql.toLowerCase().includes('update tasks') &&
+      r.sql.toLowerCase().includes('status =')
+    )
+    expect(resetRuns).toHaveLength(1)
+    expect(resetRuns[0].params).toContain('task-expired')
+
+    expect(events).toHaveLength(1)
+    expect(events[0].type).toBe('task_status_change')
+    expect(events[0].payload.task_id).toBe('task-expired')
+    expect(events[0].payload.status).toBe('backlog')
+    expect(events[0].payload.reason).toBe('lock_expired')
   })
 })

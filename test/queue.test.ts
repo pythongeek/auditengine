@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import worker from '../src/index'
 import { createToken } from '../src/lib/auth'
-import { makeMockAgentNamespaces, makeMockWorkflows } from './helpers'
+import { makeMockAgentNamespaces, makeMockWorkflows, makeMockEnvStrings } from './helpers'
 import type { Env, QueuedWriteRequest } from '../src/types/index'
 
 if (typeof crypto === 'undefined') {
@@ -83,13 +83,7 @@ async function makeEnv(overrides: Partial<Env> = {}): Promise<Env> {
     ...makeMockWorkflows(),
     WRITE_QUEUE: queue,
     BROWSER: {} as Fetcher,
-    KIMI_API_KEY: '',
-    MINIMAX_API_KEY: '',
-    GITHUB_TOKEN: '',
-    JWT_SECRET: 'test-secret',
-    STAGING_URL: '',
-    ADMIN_EMAIL: '',
-    ADMIN_PASSWORD: '',
+    ...makeMockEnvStrings(),
     ...overrides,
   }
 }

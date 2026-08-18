@@ -114,9 +114,81 @@ export async function authenticate(request: Request, env: Env): Promise<AuthCont
   return { tenantId: sub, plan: plan ?? 'free' }
 }
 
+export async function isAdmin(request: Request, env: Env): Promise<boolean> {
+  const authHeader = request.headers.get('Authorization')
+  if (!authHeader?.toLowerCase().startsWith('basic ')) {
+    return false
+  }
+  const encoded = authHeader.slice(6).trim()
+  let decoded: string
+  try {
+    decoded = atob(encoded)
+  } catch {
+    return false
+  }
+  const [email, password] = decoded.split(':')
+  return email === env.ADMIN_EMAIL && password === env.ADMIN_PASSWORD
+}
+
 export async function ensureTenant(tenantId: string, db: D1Database): Promise<void> {
   await db
     .prepare('INSERT OR IGNORE INTO tenants (id, name, plan) VALUES (?, ?, ?)')
     .bind(tenantId, tenantId, 'free')
     .run()
+}
+
+function base64urlEncodeString(input: string): string {
+  return btoa(input).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function base64urlDecodeString(input: string): string {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/')
+  const padLen = (4 - (normalized.length % 4)) % 4
+  return atob(normalized + '='.repeat(padLen))
+}
+
+export async function createOAuthState(
+  tenantId: string,
+  provider: string,
+  secret: string
+): Promise<string> {
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+  const payload = JSON.stringify({ tenantId, provider, nonce, exp: Math.floor(Date.now() / 1000) + 600 })
+  const signingInput = base64urlEncodeString(payload)
+  const key = await importHmacKey(secret)
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signingInput))
+  return `${signingInput}.${base64urlEncode(sig)}`
+}
+
+export async function verifyOAuthState(
+  state: string,
+  provider: string,
+  secret: string
+): Promise<{ tenantId: string } | null> {
+  const [payloadB64, sigB64] = state.split('.')
+  if (!payloadB64 || !sigB64) return null
+  const key = await importHmacKey(secret)
+  const sig = base64urlDecode(sigB64)
+  const valid = await crypto.subtle.verify(
+    'HMAC',
+    key,
+    sig.buffer as ArrayBuffer,
+    new TextEncoder().encode(payloadB64).buffer as ArrayBuffer
+  )
+  if (!valid) return null
+  try {
+    const payload = JSON.parse(base64urlDecodeString(payloadB64)) as {
+      tenantId?: string
+      provider?: string
+      exp?: number
+    }
+    if (payload.provider !== provider) return null
+    if (typeof payload.exp !== 'number' || payload.exp < Math.floor(Date.now() / 1000)) return null
+    if (!payload.tenantId) return null
+    return { tenantId: payload.tenantId }
+  } catch {
+    return null
+  }
 }

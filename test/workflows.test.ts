@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { PriorityResolverWorkflow } from '../src/workflows/priority-resolver-workflow'
 import { SalvationWorkflow } from '../src/workflows/salvation-workflow'
 import { ContinuousAuditWorkflow } from '../src/workflows/continuous-audit-workflow'
-import { makeMockAgentNamespaces, makeMockWorkflows } from './helpers'
+import { makeMockWorkflows, makeMockEnvStrings } from './helpers'
 import type { Env, AgentPersistentState } from '../src/types/index'
 import type { WorkflowStep, WorkflowStepContext } from 'cloudflare:workers'
 
@@ -34,22 +34,59 @@ vi.mock('../src/lib/llm-gateway', () => ({
   })),
 }))
 
-function makeMockD1(): { db: D1Database; runs: { sql: string; params: unknown[] }[] } {
+vi.mock('../src/lib/git-diff', () => ({
+  getLatestCommit: vi.fn(async () => 'new-sha'),
+  getChangedFilesSince: vi.fn(async () => [
+    { path: 'src/auth.ts', status: 'modified', new_content: 'const x = 1', patch: '' },
+  ]),
+  fetchRawFile: vi.fn(async () => null),
+}))
+
+import { getLatestCommit, getChangedFilesSince, fetchRawFile } from '../src/lib/git-diff'
+
+function makeMockD1(options: { auditSession?: { repo_url: string; repo_branch: string; last_commit_sha: string | null } } = {}): { db: D1Database; runs: { sql: string; params: unknown[] }[] } {
   const runs: { sql: string; params: unknown[] }[] = []
   const statement = (sql: string) => ({
     run: () => {
       runs.push({ sql, params: [] })
       return Promise.resolve({ changes: 1, meta: {} })
     },
-    first: () => Promise.resolve(null),
-    all: () => Promise.resolve({ results: [] }),
+    first: () => {
+      runs.push({ sql, params: [] })
+      const lower = sql.toLowerCase()
+      if (lower.includes('audit_sessions') && options.auditSession) {
+        return Promise.resolve(options.auditSession)
+      }
+      return Promise.resolve(null)
+    },
+    all: () => {
+      runs.push({ sql, params: [] })
+      return Promise.resolve({ results: [] })
+    },
     bind: (...params: unknown[]) => ({
       run: () => {
         runs.push({ sql, params })
         return Promise.resolve({ changes: 1, meta: {} })
       },
-      first: () => Promise.resolve(null),
-      all: () => Promise.resolve({ results: [] }),
+      first: () => {
+        runs.push({ sql, params })
+        const lower = sql.toLowerCase()
+        if (lower.includes('audit_sessions') && options.auditSession) {
+          return Promise.resolve(options.auditSession)
+        }
+        if (lower.includes('from findings')) {
+          return Promise.resolve({ results: [] })
+        }
+        return Promise.resolve(null)
+      },
+      all: () => {
+        runs.push({ sql, params })
+        const lower = sql.toLowerCase()
+        if (lower.includes('from findings')) {
+          return Promise.resolve({ results: [] })
+        }
+        return Promise.resolve({ results: [] })
+      },
     }),
   })
   const db = {
@@ -64,30 +101,54 @@ function makeMockD1(): { db: D1Database; runs: { sql: string; params: unknown[] 
   return { db, runs }
 }
 
+function makeMockNamespace(): DurableObjectNamespace {
+  return {
+    idFromName: () => ({ toString: () => 'agent-id' }),
+    get: () => ({
+      fetch: () => Promise.resolve(new Response('OK', { status: 200 })),
+    }),
+  } as unknown as DurableObjectNamespace
+}
+
 function makeEnv(overrides: Partial<Env> = {}): Env {
   const { db } = makeMockD1()
+  const ns = makeMockNamespace()
   return {
     DB: db,
-    R2: {} as R2Bucket,
-    ...makeMockAgentNamespaces(),
-    COORDINATOR_DO: {} as DurableObjectNamespace,
-    DASHBOARD_DO: {
-      idFromName: () => ({ toString: () => 'dashboard-id' }),
-      get: () => ({
-        fetch: () => Promise.resolve(new Response('OK', { status: 200 })),
-      }),
-    } as unknown as DurableObjectNamespace,
-    RATE_LIMIT_DO: {} as DurableObjectNamespace,
+    R2: {
+      put: () => Promise.resolve({} as R2Object),
+      get: () => Promise.resolve(null),
+      list: () => Promise.resolve({ objects: [], truncated: false, cursor: '' } as unknown as R2Objects),
+      delete: () => Promise.resolve(),
+    } as unknown as R2Bucket,
+    AGENT_DO: ns,
+    SECURITY_AGENT_DO: ns,
+    API_AGENT_DO: ns,
+    FRONTEND_AGENT_DO: ns,
+    DATABASE_AGENT_DO: ns,
+    ARCHITECTURE_AGENT_DO: ns,
+    TESTING_AGENT_DO: ns,
+    PERFORMANCE_AGENT_DO: ns,
+    DEVOPS_AGENT_DO: ns,
+    DOCUMENTATION_AGENT_DO: ns,
+    VISUAL_QA_AGENT_DO: ns,
+    BACKEND_AGENT_DO: ns,
+    DEPENDENCY_AGENT_DO: ns,
+    A11Y_AGENT_DO: ns,
+    I18N_AGENT_DO: ns,
+    LOGGING_AGENT_DO: ns,
+    CODE_QUALITY_AGENT_DO: ns,
+    ERROR_HANDLING_AGENT_DO: ns,
+    CONFIGURATION_AGENT_DO: ns,
+    REFACTORING_AGENT_DO: ns,
+    SHARED_MEMORY_DO: ns,
+    COORDINATOR_DO: ns,
+    DASHBOARD_DO: ns,
+    RATE_LIMIT_DO: ns,
     ...makeMockWorkflows(),
     WRITE_QUEUE: {} as Queue,
     BROWSER: {} as Fetcher,
-    KIMI_API_KEY: '',
-    MINIMAX_API_KEY: '',
-    GITHUB_TOKEN: '',
-    JWT_SECRET: 'test-secret',
-    STAGING_URL: '',
-    ADMIN_EMAIL: '',
-    ADMIN_PASSWORD: '',
+    ...makeMockEnvStrings(),
     ...overrides,
   }
 }
@@ -149,8 +210,16 @@ describe('Workflows', () => {
     expect(names).toEqual(['salvation-research'])
   })
 
-  it('ContinuousAuditWorkflow recalculates the production score', async () => {
-    const env = makeEnv()
+  it('ContinuousAuditWorkflow runs all seven steps', async () => {
+    const env = makeEnv({
+      DB: makeMockD1({
+        auditSession: {
+          repo_url: 'https://github.com/acme/widgets',
+          repo_branch: 'main',
+          last_commit_sha: 'old-sha',
+        },
+      }).db,
+    })
     const workflow = new ContinuousAuditWorkflow({} as ExecutionContext, env)
     const { step, names } = makeStep()
 
@@ -159,6 +228,19 @@ describe('Workflows', () => {
       step
     )
 
-    expect(names).toEqual(['recalculate-production-score'])
+    expect(names).toEqual([
+      'fetch-audit-session',
+      'fetch-latest-commit',
+      'fetch-changed-files',
+      're-ingest-changed-files',
+      'delete-removed-files',
+      'spawn-reanalysis',
+      'regression-check',
+      'trigger-consumer-audits',
+      'recalculate-score',
+      'update-last-commit',
+    ])
+    expect(vi.mocked(getLatestCommit)).toHaveBeenCalledWith('acme', 'widgets', 'main', '')
+    expect(vi.mocked(getChangedFilesSince)).toHaveBeenCalledWith('acme', 'widgets', 'old-sha', 'new-sha', '')
   })
 })

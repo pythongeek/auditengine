@@ -106,6 +106,7 @@ export interface GateContext {
   currentFileContent: string
   r2:                 R2Bucket
   claimLog:           Set<string>
+  chunkCache?:        Map<string, string>
 }
 
 // ── LLM Gateway ───────────────────────────────────────────────────────────
@@ -275,6 +276,9 @@ export interface Tenant {
   id:          string
   name:        string
   plan:        string
+  github_token:    string | null
+  gitlab_token:    string | null
+  bitbucket_token: string | null
   created_at:  string
   updated_at:  string
 }
@@ -299,6 +303,28 @@ export interface AuditSession {
   started_at:       number | null
   completed_at:     number | null
   created_at:       number
+}
+
+export interface RepoGroup {
+  group_id:   string
+  tenant_id:  string
+  name:       string
+  created_at: number
+}
+
+export interface RepoGroupMember {
+  group_id:     string
+  audit_run_id: string
+  role:         'consumer' | 'dependency' | 'service'
+}
+
+export interface RepoDependency {
+  id:               string
+  tenant_id:        string
+  group_id:         string
+  dependency_path:  string
+  consumer_run_id:  string
+  provider_run_id:  string
 }
 
 export interface FileRecord {
@@ -328,6 +354,7 @@ export interface AgentConfig {
   evidence_required: boolean
   max_retries:       number
   llm_calls_per_minute: number
+  critical:          boolean
   created_at:        number
   updated_at:        number
 }
@@ -350,6 +377,12 @@ export interface QueuedWriteRequest {
   contentType: string
   priority: boolean
   receivedAt: number
+}
+
+export interface AppSetting {
+  key: string
+  value: string
+  updated_at: number
 }
 
 export interface Env {
@@ -380,6 +413,7 @@ export interface Env {
   PRIORITY_RESOLVER_WORKFLOW: Workflow
   SALVATION_WORKFLOW:         Workflow
   CONTINUOUS_AUDIT_WORKFLOW:  Workflow
+  AUDIT_START_WORKFLOW:       Workflow
   DASHBOARD_DO:               DurableObjectNamespace
   RATE_LIMIT_DO:              DurableObjectNamespace
   WRITE_QUEUE:                Queue
@@ -387,8 +421,23 @@ export interface Env {
   KIMI_API_KEY:               string
   MINIMAX_API_KEY:            string
   GITHUB_TOKEN:               string
+  GITHUB_CLIENT_ID:           string
+  GITHUB_CLIENT_SECRET:       string
+  GITHUB_WEBHOOK_SECRET:      string
+  GITLAB_TOKEN:               string
+  GITLAB_CLIENT_ID:           string
+  GITLAB_CLIENT_SECRET:       string
+  GITLAB_WEBHOOK_SECRET:      string
+  BITBUCKET_TOKEN:            string
+  BITBUCKET_CLIENT_ID:        string
+  BITBUCKET_CLIENT_SECRET:    string
+  BITBUCKET_WEBHOOK_SECRET:   string
+  ENCRYPTION_KEY:             string
   JWT_SECRET:                 string
   STAGING_URL:                string
   ADMIN_EMAIL:                string
   ADMIN_PASSWORD:             string
+  SEARCH_API_KEY:             string
+  SEARCH_PROVIDER:            string
+  AI_GATEWAY_URL?:            string
 }

@@ -4,6 +4,8 @@ import type { Env, AgentPersistentState, AgentType, GateContext,
 import { llmCall } from '../lib/llm-gateway'
 import { runGate } from '../lib/gate'
 import { getChunk } from '../lib/r2-storage'
+import { isCriticalAgentType } from '../lib/agent-config'
+import { LRUCache } from '../lib/cache'
 
 export const DOMAIN_MAP: Record<AgentType, string> = {
   security:      "backend",
@@ -34,15 +36,19 @@ function constitutionFileName(agentType: AgentType): string {
 export async function tick(
   state: AgentPersistentState,
   env: Env,
-  broadcast: (event: DashboardEvent) => void
+  broadcast: (event: DashboardEvent) => void,
+  chunkCache?: LRUCache<string, string>
 ): Promise<AgentPersistentState> {
 
   // ALWAYS: check budget before switching
   const budgetRow = await env.DB
-    .prepare('SELECT paused FROM run_budget WHERE audit_run_id = ?')
+    .prepare('SELECT paused, throttled FROM run_budget WHERE audit_run_id = ?')
     .bind(state.auditRunId)
-    .first<{ paused: number }>()
+    .first<{ paused: number; throttled: number }>()
   if (budgetRow?.paused === 1 && state.state !== 'paused') {
+    return { ...state, state: 'paused' }
+  }
+  if (budgetRow?.throttled === 1 && !isCriticalAgentType(state.agentType) && state.state !== 'paused') {
     return { ...state, state: 'paused' }
   }
 
@@ -78,11 +84,18 @@ export async function tick(
       const specText = specObj === null ? '' : await specObj.text()
 
       const domain = DOMAIN_MAP[state.agentType]
-      const rows = await env.DB
-        .prepare('SELECT path FROM files WHERE tenant_id = ? AND audit_run_id = ? AND domain_tag = ?')
-        .bind(state.tenantId ?? '', state.auditRunId, domain)
-        .all<{ path: string }>()
-      const fileQueue = rows.results?.map(r => r.path) ?? []
+      const registryRow = await env.DB
+        .prepare('SELECT assigned_files FROM agent_registry WHERE agent_id = ?')
+        .bind(state.agentId)
+        .first<{ assigned_files: string }>()
+      const assignedFiles = registryRow?.assigned_files ? JSON.parse(registryRow.assigned_files) as string[] : []
+
+      const fileQueue = assignedFiles.length > 0
+        ? assignedFiles
+        : (await env.DB
+            .prepare('SELECT path FROM files WHERE tenant_id = ? AND audit_run_id = ? AND domain_tag = ?')
+            .bind(state.tenantId ?? '', state.auditRunId, domain)
+            .all<{ path: string }>()).results?.map(r => r.path) ?? []
 
       return {
         ...state,
@@ -194,7 +207,7 @@ export async function tick(
         return { ...state, state: 'looping' }
       }
 
-      const ctx = buildGateContext(state, env)
+      const ctx = buildGateContext(state, env, chunkCache)
       const gateResult = await runGate(state.lastModelOutput, ctx, env.DB)
 
       if (gateResult.passed) {
@@ -536,7 +549,7 @@ export function mergeCrossAgentContext(
   return merged.slice(0, 50)
 }
 
-export function buildGateContext(state: AgentPersistentState, env: Env): GateContext {
+export function buildGateContext(state: AgentPersistentState, env: Env, chunkCache?: LRUCache<string, string>): GateContext {
   return {
     agentId: state.agentId,
     agentType: state.agentType,
@@ -546,6 +559,7 @@ export function buildGateContext(state: AgentPersistentState, env: Env): GateCon
     currentFileContent: state.currentFileContent!,
     r2: env.R2,
     claimLog: new Set(),
+    chunkCache,
   }
 }
 
@@ -658,6 +672,8 @@ If any layer is missing or bypassed, explain exactly what is missing and how it 
 }
 
 export class AgentDurableObject extends DurableObject<Env> {
+  private chunkCache = new LRUCache<string, string>(50)
+
   async fetch(request: Request): Promise<Response> {
     const body = await request.json() as {
       agentId: string
@@ -703,7 +719,7 @@ export class AgentDurableObject extends DurableObject<Env> {
 
     let previousState = state.state
     while (state.state !== 'done' && state.state !== 'paused') {
-      state = await tick(state, this.env, broadcast)
+      state = await tick(state, this.env, broadcast, this.chunkCache)
       if (state.state !== previousState) {
         await writeAuditLog(
           this.env.DB,

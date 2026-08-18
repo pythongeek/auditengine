@@ -190,8 +190,11 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="brand">AuditEngine</div>
     <div>
       <a href="/">Home</a>
+      <a href="/repos">Repos</a>
+      <a href="/audits">Audits</a>
       <a href="/audit/new">New Audit</a>
       <a href="/dashboard">Dashboard</a>
+      <a href="/settings">Settings</a>
     </div>
   </nav>
 
@@ -199,6 +202,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     <div id="auditMeta">Audit: —</div>
     <div id="connection">Disconnected</div>
   </header>
+
+  <div id="noAuditWarning" style="display:none; padding: 1rem 1.5rem; color: var(--muted); border-bottom: 1px solid var(--border);">
+    No <code>audit_run_id</code> in the URL. <a href="/audit/new" style="color: var(--accent);">Start a new audit</a> or pick one from <a href="/audits" style="color: var(--accent);">Audits</a>.
+  </div>
 
   <main>
     <section>
@@ -256,8 +263,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       agents[type] = { state: 'idle', files: 0, findings: 0 };
     });
 
+    const token = localStorage.getItem('auditengine_token');
     const params = new URLSearchParams(location.search);
     const auditRunId = params.get('audit_run_id') || 'default';
+    if (!token) location.href = '/login';
+    if (auditRunId === 'default') {
+      document.getElementById('noAuditWarning').style.display = 'block';
+    }
 
     const els = {
       agents: document.getElementById('agents'),
@@ -413,6 +425,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     function connect() {
       const url = new URL('/dashboard/ws', location.origin);
       url.searchParams.set('audit_run_id', auditRunId);
+      url.searchParams.set('token', token);
       url.protocol = url.protocol.replace('http', 'ws');
       ws = new WebSocket(url);
       ws.onopen = () => {

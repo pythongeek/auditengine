@@ -136,6 +136,12 @@ export function groupFindingsIntoTasks(scoredFindings: ScoredFinding[]): Omit<Ta
 export async function runPriorityResolver(auditRunId: string, env: Env): Promise<void> {
   const db = env.DB
 
+  const sessionRow = await db
+    .prepare('SELECT tenant_id FROM audit_sessions WHERE id = ?')
+    .bind(auditRunId)
+    .first<{ tenant_id: string }>()
+  const tenantId = sessionRow?.tenant_id ?? ''
+
   const rows = await db
     .prepare('SELECT * FROM findings WHERE audit_run_id = ?')
     .bind(auditRunId)
@@ -152,8 +158,6 @@ export async function runPriorityResolver(auditRunId: string, env: Env): Promise
   const taskGroups = groupFindingsIntoTasks(scored)
 
   const statements = taskGroups.map(group => {
-    const isConflict = conflictFiles.has(group.finding_ids ? '' : '')
-    // Recompute file from finding_ids by looking up the first finding
     const ids: string[] = JSON.parse(group.finding_ids)
     const firstFinding = findings.find(f => f.finding_id === ids[0])
     const fileConflict = firstFinding ? conflictFiles.has(firstFinding.file) : false
@@ -161,11 +165,12 @@ export async function runPriorityResolver(auditRunId: string, env: Env): Promise
     return db
       .prepare(`
         INSERT INTO tasks
-          (audit_run_id, title, finding_ids, priority_score, multipliers, status,
+          (tenant_id, audit_run_id, title, finding_ids, priority_score, multipliers, status,
            assigned_agent, commit_sha, conflict_flag, conflict_reason, lock_expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .bind(
+        tenantId,
         group.audit_run_id,
         group.title,
         group.finding_ids,
@@ -175,7 +180,7 @@ export async function runPriorityResolver(auditRunId: string, env: Env): Promise
         group.assigned_agent,
         group.commit_sha,
         fileConflict ? 1 : 0,
-        fileConflict ? 'Security and Architecture both flagged this file' : null,
+        fileConflict ? 'Security and Refactoring both flagged this file' : null,
         group.lock_expires_at
       )
   })

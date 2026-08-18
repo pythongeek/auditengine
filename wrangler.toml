@@ -69,6 +69,20 @@ new_sqlite_classes = ["SharedMemoryDurableObject"]
 STAGING_URL = "https://PASTE_STAGING_URL_HERE"
 ADMIN_EMAIL = "admin@example.com"
 JWT_SECRET = "dev-secret-change-in-production"
+SEARCH_PROVIDER = "brave"
+GITHUB_CLIENT_ID = "PASTE_GITHUB_CLIENT_ID"
+GITHUB_CLIENT_SECRET = "PASTE_GITHUB_CLIENT_SECRET"
+GITHUB_WEBHOOK_SECRET = "dev-webhook-secret-change-in-production"
+GITLAB_TOKEN = "PASTE_GITLAB_TOKEN"
+GITLAB_CLIENT_ID = "PASTE_GITLAB_CLIENT_ID"
+GITLAB_CLIENT_SECRET = "PASTE_GITLAB_CLIENT_SECRET"
+GITLAB_WEBHOOK_SECRET = "PASTE_GITLAB_WEBHOOK_SECRET"
+BITBUCKET_TOKEN = "PASTE_BITBUCKET_TOKEN"
+BITBUCKET_CLIENT_ID = "PASTE_BITBUCKET_CLIENT_ID"
+BITBUCKET_CLIENT_SECRET = "PASTE_BITBUCKET_CLIENT_SECRET"
+BITBUCKET_WEBHOOK_SECRET = "PASTE_BITBUCKET_WEBHOOK_SECRET"
+ENCRYPTION_KEY = "dev-encryption-key-change-in-production"
+AI_GATEWAY_URL = ""
 
 [browser]
 binding = "BROWSER"
@@ -97,3 +111,9 @@ class_name = "SalvationWorkflow"
 binding = "CONTINUOUS_AUDIT_WORKFLOW"
 name = "continuous-audit"
 class_name = "ContinuousAuditWorkflow"
+schedules = ["0 * * * *"]
+
+[[workflows]]
+binding = "AUDIT_START_WORKFLOW"
+name = "audit-start"
+class_name = "AuditStartWorkflow"

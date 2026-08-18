@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createToken, verifyToken, authenticate, ensureTenant } from '../src/lib/auth'
-import { makeMockAgentNamespaces, makeMockWorkflows } from './helpers'
+import { makeMockAgentNamespaces, makeMockWorkflows, makeMockEnvStrings } from './helpers'
 import type { Env } from '../src/types/index'
 
 if (typeof crypto === 'undefined') {
@@ -22,13 +22,7 @@ const mockEnv: Env = {
   ...makeMockWorkflows(),
   WRITE_QUEUE: {} as Queue,
   BROWSER: {} as Fetcher,
-  KIMI_API_KEY: '',
-  MINIMAX_API_KEY: '',
-  GITHUB_TOKEN: '',
-  JWT_SECRET: 'test-secret',
-  STAGING_URL: '',
-  ADMIN_EMAIL: '',
-  ADMIN_PASSWORD: '',
+  ...makeMockEnvStrings(),
 }
 
 describe('auth', () => {

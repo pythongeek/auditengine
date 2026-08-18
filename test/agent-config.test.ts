@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { getAgentConfig, setAgentConfig, ensureDefaultAgentConfig, listAgentConfigs, ALL_AGENT_TYPES } from '../src/lib/agent-config'
-
-type AgentType = 'security' | 'api' | 'frontend' | 'database' | 'architecture' | 'testing' | 'performance' | 'devops' | 'documentation' | 'visual_qa'
+import { getAgentConfig, setAgentConfig, ensureDefaultAgentConfig, listAgentConfigs, ALL_AGENT_TYPES, NON_CRITICAL_AGENT_TYPES, isCriticalAgentType } from '../src/lib/agent-config'
+import type { AgentType } from '../src/types/index'
 
 function makeMockD1() {
   const configs: Array<Record<string, unknown>> = []
@@ -29,7 +28,7 @@ function makeMockD1() {
           if (sql.toLowerCase().includes('insert or ignore into agent_config')) {
             const [
               tenantId, agentId, modelProvider, modelName, temperature, topP,
-              maxTokens, evidenceRequired, maxRetries, llmCallsPerMinute
+              maxTokens, evidenceRequired, maxRetries, llmCallsPerMinute, critical
             ] = params
             if (!configs.find(c => c.tenant_id === tenantId && c.agent_id === agentId)) {
               configs.push({
@@ -43,12 +42,13 @@ function makeMockD1() {
                 evidence_required: evidenceRequired,
                 max_retries: maxRetries,
                 llm_calls_per_minute: llmCallsPerMinute,
+                critical,
               })
             }
           } else if (sql.toLowerCase().includes('insert into agent_config')) {
             const [
               tenantId, agentId, modelProvider, modelName, temperature, topP,
-              maxTokens, evidenceRequired, maxRetries, llmCallsPerMinute
+              maxTokens, evidenceRequired, maxRetries, llmCallsPerMinute, critical
             ] = params
             const idx = configs.findIndex(c => c.tenant_id === tenantId && c.agent_id === agentId)
             const row = {
@@ -62,6 +62,7 @@ function makeMockD1() {
               evidence_required: evidenceRequired,
               max_retries: maxRetries,
               llm_calls_per_minute: llmCallsPerMinute,
+              critical,
             }
             if (idx >= 0) configs[idx] = row
             else configs.push(row)
@@ -113,5 +114,32 @@ describe('agent-config', () => {
     }
     expect(configs.length).toBe(19)
     expect(new Set(configs.map(c => c.agent_id)).size).toBe(19)
+  })
+
+  it('returns correct default criticality for critical and non-critical agents', async () => {
+    const { db } = makeMockD1()
+    const critical = await getAgentConfig(db, 'tenant-1', 'security')
+    expect(critical.critical).toBe(true)
+    const nonCritical = await getAgentConfig(db, 'tenant-1', 'testing')
+    expect(nonCritical.critical).toBe(false)
+  })
+
+  it('persists criticality when seeding and updating config', async () => {
+    const { db, configs } = makeMockD1()
+    await ensureDefaultAgentConfig(db, 'tenant-1', 'testing')
+    expect(configs[0].critical).toBe(0)
+    const updated = await setAgentConfig(db, 'tenant-1', 'testing', { critical: true })
+    expect(updated.critical).toBe(true)
+    expect(configs[0].critical).toBe(1)
+  })
+
+  it('isCriticalAgentType distinguishes critical and non-critical agent types', () => {
+    expect(isCriticalAgentType('security')).toBe(true)
+    expect(isCriticalAgentType('architecture')).toBe(true)
+    expect(isCriticalAgentType('testing')).toBe(false)
+    expect(isCriticalAgentType('documentation')).toBe(false)
+    expect(isCriticalAgentType('performance')).toBe(false)
+    expect(isCriticalAgentType('visual_qa')).toBe(false)
+    expect(isCriticalAgentType('logging')).toBe(false)
   })
 })

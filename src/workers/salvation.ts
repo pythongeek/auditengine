@@ -1,10 +1,23 @@
-import type { Env, AgentPersistentState, SalvationReport, Message, DashboardEvent } from '../types/index'
+import type { Env, AgentPersistentState, SalvationReport, Message, DashboardEvent, SalvationResearchSource } from '../types/index'
 import { llmCall } from '../lib/llm-gateway'
+import { researchSalvation } from '../lib/external-research'
 
-export function buildSalvationPrompt(state: AgentPersistentState): Message[] {
+export function buildSalvationPrompt(
+  state: AgentPersistentState,
+  researchSources: SalvationResearchSource[]
+): Message[] {
   const history = state.gateRejectionHistory.length > 0
     ? state.gateRejectionHistory.map((reason, i) => `${i + 1}. ${reason}`).join('\n')
     : '(none recorded)'
+
+  const sourceBlock = researchSources.length > 0
+    ? researchSources
+        .map(
+          (s, i) =>
+            `${i + 1}. [${s.source_type}] ${s.url}\n   Relevant finding: ${s.relevant_finding}\n   Proposed solution: ${s.proposed_solution}`
+        )
+        .join('\n')
+    : 'No authoritative external sources were found for this query.'
 
   const userContent = `## SALVATION PROTOCOL ACTIVATED
 
@@ -13,12 +26,15 @@ File: ${state.currentFile}
 Previous gate rejections:
 ${history}
 
+## REAL RESEARCH SOURCES
+${sourceBlock}
+
 You are in salvation mode. The agent's previous attempts to analyze this file failed the verification gate three times. Your job is to produce a structured research report that explains the issue and provides a safe path forward.
 
 Research instructions:
-1. Identify known patterns, anti-patterns, or common causes for the rejected finding type.
-2. Reference OWASP guidance where relevant to the issue.
-3. Reference known CVEs or framework-specific vulnerabilities where relevant.
+1. Use the real research sources above wherever possible; include their source_type, url, relevant_finding, and proposed_solution verbatim.
+2. If fewer than 2 real sources are available, you MUST also include at least one source with source_type "framework_docs" and url "https://llm-generated" to mark it as LLM-generated context. In that source, clearly state that no authoritative external source was found and that the content is model-generated.
+3. Reference OWASP guidance where relevant to the issue.
 4. Propose a concrete remediation path that a human reviewer can follow.
 
 Output ONLY a JSON object matching this exact schema. No prose. No markdown outside the JSON.
@@ -99,11 +115,21 @@ export async function runSalvationProtocol(
   }
 
   try {
+    const researchSources = await researchSalvation(state, env, db)
+
+    const fallbackSource: SalvationResearchSource = {
+      source_type: 'framework_docs',
+      url: 'https://llm-generated',
+      relevant_finding: '[LLM-generated] No authoritative external source was found for this query; using model-generated guidance.',
+      proposed_solution: 'Use the remediation path proposed by the model and verify it against the project-specific context and tests.',
+    }
+    const promptSources = researchSources.length >= 2 ? researchSources : [...researchSources, fallbackSource]
+
     const response = await llmCall({
       agentId: state.agentId,
       agentType: state.agentType,
       taskType: 'salvation_research',
-      messages: buildSalvationPrompt(state),
+      messages: buildSalvationPrompt(state, promptSources),
       auditRunId: state.auditRunId,
       db,
       broadcast,

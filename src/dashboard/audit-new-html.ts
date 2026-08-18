@@ -85,6 +85,19 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
     #status { margin-top: 1rem; font-weight: 600; }
     #status.ok { color: var(--green); }
     #status.err { color: var(--red); }
+    #loginWarning { color: var(--red); margin-bottom: 1rem; display: none; }
+    #tokenStatus { font-size: 0.85rem; color: var(--muted); margin-bottom: 1rem; }
+    .repo-chip {
+      display: inline-block;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.3rem 0.6rem;
+      margin: 0 0.4rem 0.4rem 0;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .repo-chip:hover { border-color: var(--accent); color: var(--accent); }
   </style>
 </head>
 <body>
@@ -92,18 +105,35 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
     <div class="brand">AuditEngine</div>
     <div>
       <a href="/">Home</a>
+      <a href="/repos">Repos</a>
+      <a href="/audits">Audits</a>
       <a href="/audit/new">New Audit</a>
       <a href="/dashboard">Dashboard</a>
+      <a href="/settings">Settings</a>
     </div>
   </nav>
 
   <main>
     <h1>Start New Audit</h1>
+    <div id="loginWarning">You are not logged in. <a href="/login" style="color: var(--accent);">Log in</a> with your tenant token first.</div>
+    <div id="tokenStatus"></div>
 
     <div class="card">
       <label for="auditId">Audit Run ID</label>
       <input type="text" id="auditId" placeholder="run-2026-08-08-001" />
       <div class="hint">Leave blank to auto-generate. Use only letters, numbers, dashes, and underscores.</div>
+    </div>
+
+    <div class="card">
+      <label for="repoUrl">Git Repository URL</label>
+      <input type="text" id="repoUrl" placeholder="https://github.com/owner/repo" />
+      <div class="hint">Enter a GitHub, GitLab, or Bitbucket repo URL to audit it directly. Leave blank to upload/paste files instead. Make sure a Git provider token is saved in <a href="/settings" style="color: var(--accent);">Settings</a> for private repos.</div>
+
+      <label for="branch" style="margin-top: 1rem;">Branch (optional)</label>
+      <input type="text" id="branch" placeholder="main" />
+      <div class="hint">Defaults to the repo’s default branch. Leave blank unless you need a specific branch.</div>
+
+      <div id="recentRepos" style="margin-top: 1rem;"></div>
     </div>
 
     <div class="card">
@@ -134,6 +164,47 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
     const startBtn = document.getElementById('startBtn');
     const statusEl = document.getElementById('status');
     const auditIdInput = document.getElementById('auditId');
+    const repoUrlInput = document.getElementById('repoUrl');
+    const branchInput = document.getElementById('branch');
+    const loginWarning = document.getElementById('loginWarning');
+    const tokenStatus = document.getElementById('tokenStatus');
+    const recentRepos = document.getElementById('recentRepos');
+
+    const token = localStorage.getItem('auditengine_token');
+    const tenantId = localStorage.getItem('auditengine_tenant');
+
+    if (!token || !tenantId) {
+      loginWarning.style.display = 'block';
+      startBtn.disabled = true;
+    } else {
+      tokenStatus.textContent = 'Tenant: ' + tenantId;
+    }
+
+    const params = new URLSearchParams(location.search);
+    const prefillRepo = params.get('repo');
+    if (prefillRepo) {
+      repoUrlInput.value = prefillRepo;
+    }
+
+    async function loadRecentRepos() {
+      if (!token || !tenantId) return;
+      try {
+        const res = await fetch('/api/v1/tenants/' + tenantId + '/audits', { headers: { Authorization: 'Bearer ' + token } });
+        if (!res.ok) return;
+        const data = await res.json();
+        const audits = data.audits || [];
+        const urls = [...new Set(audits.map(a => a.repo_url).filter(Boolean))].slice(0, 5);
+        if (urls.length === 0) return;
+        recentRepos.innerHTML = '<div style="color: var(--muted); margin-bottom: 0.4rem; font-size: 0.85rem;">Recent repos:</div>' +
+          urls.map(u => \`<span class="repo-chip" data-url="\${u}">\${u}</span>\`).join('');
+        recentRepos.querySelectorAll('.repo-chip').forEach(el => {
+          el.addEventListener('click', () => { repoUrlInput.value = el.dataset.url; });
+        });
+      } catch {
+        // ignore
+      }
+    }
+    loadRecentRepos();
 
     let selectedFiles = [];
 
@@ -173,38 +244,55 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
           throw new Error('Audit Run ID must contain only letters, numbers, dashes, and underscores.');
         }
 
-        let filesPayload;
-        const pasted = pasteArea.value.trim();
-        if (pasted) {
-          filesPayload = JSON.parse(pasted);
-          if (!Array.isArray(filesPayload)) throw new Error('Pasted JSON must be an array.');
+        const repoUrl = repoUrlInput.value.trim();
+        const branch = branchInput.value.trim();
+        const body = { audit_run_id: auditId };
+
+        if (repoUrl) {
+          body.repo_url = repoUrl;
+          if (branch) body.branch = branch;
         } else {
-          if (selectedFiles.length === 0) {
-            throw new Error('Select files or paste a JSON array.');
+          let filesPayload;
+          const pasted = pasteArea.value.trim();
+          if (pasted) {
+            filesPayload = JSON.parse(pasted);
+            if (!Array.isArray(filesPayload)) throw new Error('Pasted JSON must be an array.');
+          } else {
+            if (selectedFiles.length === 0) {
+              throw new Error('Select files, paste a JSON array, or enter a repository URL.');
+            }
+            filesPayload = await readFiles(selectedFiles);
           }
-          filesPayload = await readFiles(selectedFiles);
+
+          if (filesPayload.length === 0) {
+            throw new Error('At least one file is required.');
+          }
+          body.files = filesPayload;
         }
 
-        if (filesPayload.length === 0) {
-          throw new Error('At least one file is required.');
+        if (!token) {
+          throw new Error('Please log in first. Go to /login and paste your tenant token.');
         }
 
         const resp = await fetch('/audit/start', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ audit_run_id: auditId, files: filesPayload }),
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + token,
+          },
+          body: JSON.stringify(body),
         });
 
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
-          throw new Error(data.message || \`HTTP \${resp.status}\`);
+          throw new Error(data.error || data.message || \`HTTP \${resp.status}\`);
         }
 
         statusEl.className = 'ok';
-        statusEl.textContent = \`Audit started: \${auditId}. Redirecting to dashboard…\`;
+        statusEl.textContent = \`Audit queued: \${auditId}. For large repos ingestion may take a few minutes. Redirecting to dashboard…\`;
         setTimeout(() => {
           location.href = \`/dashboard?audit_run_id=\${encodeURIComponent(auditId)}\`;
-        }, 1200);
+        }, 1500);
       } catch (err) {
         statusEl.className = 'err';
         statusEl.textContent = err.message;

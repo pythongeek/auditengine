@@ -3,7 +3,7 @@ import type { Env, AgentType, AuditPhase, DashboardEvent } from '../types/index'
 import { DOMAIN_MAP, AgentDurableObject } from '../agents/base-agent'
 import { verifyTask, recalcProductionScore } from './verification'
 import { runVisualQA } from './visual-qa'
-import { ensureDefaultAgentConfig, ALL_AGENT_TYPES } from '../lib/agent-config'
+import { ensureDefaultAgentConfig, ALL_AGENT_TYPES, NON_CRITICAL_AGENT_TYPES } from '../lib/agent-config'
 
 export class CoordinatorDurableObject extends DurableObject<Env> {
   private auditRunId: string = ''
@@ -68,7 +68,7 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
 
     if (!budgetRow) return
 
-    // Transition 7: budget alert broadcast (run every tick)
+    // Transition 7: budget alert broadcast and agent throttling (run every tick)
     if (budgetRow.alert_50_sent === 1 && this.lastAlertState.alert_50_sent === 0) {
       this.broadcast({
         type: 'budget_alert',
@@ -78,18 +78,48 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
       })
     }
     if (budgetRow.alert_80_sent === 1 && this.lastAlertState.alert_80_sent === 0) {
+      await db
+        .prepare(`
+          UPDATE agent_registry
+          SET status = 'paused'
+          WHERE audit_run_id = ? AND agent_type IN (${NON_CRITICAL_AGENT_TYPES.map(() => '?').join(',')})
+        `)
+        .bind(this.auditRunId, ...NON_CRITICAL_AGENT_TYPES)
+        .run()
+
       this.broadcast({
         type: 'budget_alert',
         audit_run_id: this.auditRunId,
-        payload: { threshold: 80, spent_usd: budgetRow.spent_usd, budget_usd: budgetRow.budget_usd },
+        payload: {
+          threshold: 80,
+          spent_usd: budgetRow.spent_usd,
+          budget_usd: budgetRow.budget_usd,
+          scope: 'non_critical',
+          paused_agents: NON_CRITICAL_AGENT_TYPES,
+        },
         ts: Date.now(),
       })
     }
     if (budgetRow.alert_95_sent === 1 && this.lastAlertState.alert_95_sent === 0) {
+      await db
+        .prepare(`
+          UPDATE agent_registry
+          SET status = 'paused'
+          WHERE audit_run_id = ?
+        `)
+        .bind(this.auditRunId)
+        .run()
+
       this.broadcast({
         type: 'budget_alert',
         audit_run_id: this.auditRunId,
-        payload: { threshold: 95, spent_usd: budgetRow.spent_usd, budget_usd: budgetRow.budget_usd },
+        payload: {
+          threshold: 95,
+          spent_usd: budgetRow.spent_usd,
+          budget_usd: budgetRow.budget_usd,
+          scope: 'all',
+          paused_agents: ALL_AGENT_TYPES,
+        },
         ts: Date.now(),
       })
     }
@@ -97,6 +127,28 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
       alert_50_sent: budgetRow.alert_50_sent,
       alert_80_sent: budgetRow.alert_80_sent,
       alert_95_sent: budgetRow.alert_95_sent,
+    }
+
+    // Reset tasks whose 48-hour in-progress lock has expired.
+    const expiredLocks = await db
+      .prepare(`
+        SELECT task_id FROM tasks
+        WHERE audit_run_id = ? AND status = ? AND lock_expires_at IS NOT NULL AND lock_expires_at < unixepoch()
+      `)
+      .bind(this.auditRunId, 'in_progress')
+      .all<{ task_id: string }>()
+
+    for (const task of expiredLocks.results ?? []) {
+      await db
+        .prepare('UPDATE tasks SET status = ?, assigned_agent = ?, lock_expires_at = ?, updated_at = unixepoch() WHERE task_id = ?')
+        .bind('backlog', null, null, task.task_id)
+        .run()
+      this.broadcast({
+        type: 'task_status_change',
+        audit_run_id: this.auditRunId,
+        payload: { task_id: task.task_id, status: 'backlog', reason: 'lock_expired' },
+        ts: Date.now(),
+      })
     }
 
     const currentPhase = budgetRow.phase as AuditPhase
@@ -192,7 +244,7 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
         .all<{ task_id: string }>()
 
       for (const task of inReviewTasks.results ?? []) {
-        await spawnVerificationAgent(task.task_id, env)
+        await spawnVerificationAgent(task.task_id, env, (event) => this.broadcast(event))
       }
     }
 
@@ -322,11 +374,12 @@ export async function spawnAgent(
   phase: number,
   tenantId: string,
   auditRunId: string,
-  env: Env
+  env: Env,
+  overrideFiles?: string[]
 ): Promise<void> {
   const agentId = `${agentType}-${auditRunId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
   const domain = DOMAIN_MAP[agentType]
-  const assignedFiles = await getAssignedFiles(auditRunId, tenantId, env.DB, agentType)
+  const assignedFiles = overrideFiles ?? await getAssignedFiles(auditRunId, tenantId, env.DB, agentType)
 
   await env.DB
     .prepare(`
@@ -367,7 +420,11 @@ async function allAgentsDoneInPhase(auditRunId: string, phase: number, db: D1Dat
 }
 
 // STUBS — implemented in later sessions
-async function spawnVerificationAgent(taskId: string, env: Env): Promise<void> {
+async function spawnVerificationAgent(
+  taskId: string,
+  env: Env,
+  broadcast?: (event: DashboardEvent) => void
+): Promise<void> {
   const task = await env.DB
     .prepare('SELECT * FROM tasks WHERE task_id = ?')
     .bind(taskId)
@@ -375,7 +432,7 @@ async function spawnVerificationAgent(taskId: string, env: Env): Promise<void> {
 
   if (!task || !task.commit_sha) return
 
-  await verifyTask(task as unknown as import('../types/index').Task, env)
+  await verifyTask(task as unknown as import('../types/index').Task, env, false, broadcast)
 }
 
 async function spawnVisualQA(auditRunId: string, env: Env): Promise<void> {
