@@ -68,24 +68,30 @@ new_sqlite_classes = ["SharedMemoryDurableObject"]
 [vars]
 STAGING_URL = "https://PASTE_STAGING_URL_HERE"
 ADMIN_EMAIL = "admin@example.com"
-JWT_SECRET = "dev-secret-change-in-production"
 SEARCH_PROVIDER = "brave"
-GITHUB_CLIENT_ID = "PASTE_GITHUB_CLIENT_ID"
-GITHUB_CLIENT_SECRET = "PASTE_GITHUB_CLIENT_SECRET"
-GITHUB_WEBHOOK_SECRET = "dev-webhook-secret-change-in-production"
-GITLAB_TOKEN = "PASTE_GITLAB_TOKEN"
-GITLAB_CLIENT_ID = "PASTE_GITLAB_CLIENT_ID"
-GITLAB_CLIENT_SECRET = "PASTE_GITLAB_CLIENT_SECRET"
-GITLAB_WEBHOOK_SECRET = "PASTE_GITLAB_WEBHOOK_SECRET"
-BITBUCKET_TOKEN = "PASTE_BITBUCKET_TOKEN"
-BITBUCKET_CLIENT_ID = "PASTE_BITBUCKET_CLIENT_ID"
-BITBUCKET_CLIENT_SECRET = "PASTE_BITBUCKET_CLIENT_SECRET"
-BITBUCKET_WEBHOOK_SECRET = "PASTE_BITBUCKET_WEBHOOK_SECRET"
-ENCRYPTION_KEY = "dev-encryption-key-change-in-production"
 AI_GATEWAY_URL = ""
+
+# ── Secrets ────────────────────────────────────────────────────────────────
+# The following MUST be set with `wrangler secret put <NAME>` — never commit
+# real values to [vars]:
+#   JWT_SECRET, ENCRYPTION_KEY, ADMIN_PASSWORD,
+#   KIMI_API_KEY, MINIMAX_API_KEY, GITHUB_TOKEN, SEARCH_API_KEY,
+#   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_WEBHOOK_SECRET,
+#   GITLAB_TOKEN, GITLAB_CLIENT_ID, GITLAB_CLIENT_SECRET, GITLAB_WEBHOOK_SECRET,
+#   BITBUCKET_TOKEN, BITBUCKET_CLIENT_ID, BITBUCKET_CLIENT_SECRET, BITBUCKET_WEBHOOK_SECRET
+#
+# For local `wrangler dev`, copy the names above into a gitignored .dev.vars
+# file with development values.
 
 [browser]
 binding = "BROWSER"
+
+# Hourly continuous re-audit of completed repo audits (handled by the
+# scheduled() handler in src/index.ts, which starts ContinuousAuditWorkflow
+# instances). Note: [[workflows]] entries do not support a `schedules` key —
+# cron triggers must live here.
+[triggers]
+crons = ["0 * * * *"]
 
 [[queues.producers]]
 binding = "WRITE_QUEUE"
@@ -111,7 +117,6 @@ class_name = "SalvationWorkflow"
 binding = "CONTINUOUS_AUDIT_WORKFLOW"
 name = "continuous-audit"
 class_name = "ContinuousAuditWorkflow"
-schedules = ["0 * * * *"]
 
 [[workflows]]
 binding = "AUDIT_START_WORKFLOW"

@@ -114,7 +114,8 @@ export type TaskType =
   | "deep_audit" | "simple_analysis" | "cross_read_summary"
   | "salvation_research" | "visual_qa_script" | "verification"
   | "trace_analysis" | "conflict_resolution" | "qa_script_gen"
-  | "gate_retry" | "dedup" | "task_description" | "log_summary" | "fallback"
+  | "gate_retry" | "dedup" | "task_description" | "log_summary"
+  | "remediation_plan" | "code_fix" | "fallback"
 
 export interface LLMCallParams {
   agentId:    string
@@ -159,6 +160,8 @@ export interface Task {
   conflict_flag:     0 | 1
   conflict_reason:   string | null
   lock_expires_at:   number | null
+  plan_text?:        string | null
+  plan_status?:      "none" | "generating" | "ready" | "failed"
 }
 
 export interface ConflictGroup {
@@ -228,6 +231,7 @@ export type DashboardEventType =
   | "gate_rejected" | "gate_passed" | "salvation_activated"
   | "salvation_complete" | "task_created" | "task_status_change"
   | "budget_alert" | "token_usage" | "audit_complete" | "repo_ready"
+  | "agent_error" | "plan_ready" | "fix_applied"
   | "agent.status" | "file.claimed" | "task.updated" | "verification"
   | "salvation" | "qa.result" | "score.updated" | "conflict"
 
@@ -249,7 +253,7 @@ export interface AgentRegistryRow {
   tenant_id?:     string
   agent_type:     AgentType
   audit_run_id:   string
-  status:         "idle" | "boot" | "running" | "blocked" | "done" | "failed" | "paused"
+  status:         "idle" | "boot" | "running" | "blocked" | "done" | "failed" | "paused" | "error"
   phase:          number
   spawned_at:     number
   done_at:        number | null

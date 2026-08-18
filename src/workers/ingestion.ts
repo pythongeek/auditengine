@@ -31,7 +31,9 @@ export function chunkFile(content: string, chunkSize = 500): string[] {
 export function tagDomain(filePath: string): string {
   const lower = filePath.toLowerCase()
 
-  if (lower.startsWith('test/') || lower.startsWith('__tests__/') || lower.endsWith('.test.ts') || lower.endsWith('.test.js')) {
+  if (lower.startsWith('test/') || lower.startsWith('__tests__/') || lower.startsWith('tests/')
+    || lower.includes('/test/') || lower.includes('/tests/') || lower.includes('/__tests__/')
+    || /\.(test|spec)\.[a-z0-9]+$/.test(lower)) {
     return 'test'
   }
 
@@ -39,7 +41,7 @@ export function tagDomain(filePath: string): string {
     return 'frontend'
   }
 
-  if (lower.endsWith('/schema.sql') || lower.includes('/migrations/') || lower.includes('prisma')) {
+  if (lower.endsWith('/schema.sql') || lower.endsWith('.sql') || lower.includes('/migrations/') || lower.includes('prisma')) {
     return 'database'
   }
 
@@ -47,7 +49,8 @@ export function tagDomain(filePath: string): string {
     return 'backend'
   }
 
-  if (lower.startsWith('src/config/') || lower.includes('dockerfile') || lower.includes('docker-compose')) {
+  if (lower.startsWith('src/config/') || lower.includes('dockerfile') || lower.includes('docker-compose')
+    || /\.(ya?ml|toml|ini|cfg|conf)$/.test(lower) || lower.endsWith('/.env') || lower.endsWith('.env.example')) {
     return 'config'
   }
 
@@ -56,6 +59,16 @@ export function tagDomain(filePath: string): string {
   }
 
   if (lower.endsWith('.sol')) return 'smart-contract'
+
+  // Extension-based fallback so non-JS/TS repos still reach the specialists:
+  // typical server-side languages map to the backend domain unless the path
+  // clearly belongs to the frontend.
+  const frontendExts = /\.(tsx|jsx|vue|svelte|css|scss|sass|less|html?)$/
+  const backendExts = /\.(py|go|java|rb|php|cs|rs|kt|scala|ex|exs)$/
+  if (frontendExts.test(lower)) return 'frontend'
+  if (backendExts.test(lower) && !lower.includes('/public/') && !lower.includes('/static/')) {
+    return 'backend'
+  }
 
   return 'all'
 }

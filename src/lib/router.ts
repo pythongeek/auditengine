@@ -800,6 +800,53 @@ export async function handleTaskVerify(
   return jsonResponse({ task_id: taskId, verification: verificationResult })
 }
 
+export async function handleTaskPlanPost(
+  env: Env,
+  tenantId: string,
+  auditRunId: string,
+  taskId: string
+): Promise<Response> {
+  const owns = await verifyAuditRunTenant(env.DB, auditRunId, tenantId)
+  if (!owns) return errorResponse('Audit run not found', 404)
+
+  const task = await env.DB
+    .prepare('SELECT task_id FROM tasks WHERE task_id = ? AND audit_run_id = ?')
+    .bind(taskId, auditRunId)
+    .first()
+  if (!task) return errorResponse('Task not found', 404)
+
+  const { generatePlanForTask } = await import('../workers/planner')
+  const result = await generatePlanForTask(taskId, env)
+  if (!result.ok) return errorResponse(result.error ?? 'Plan generation failed', 500)
+
+  await logTaskEvent(env.DB, tenantId, auditRunId, taskId, 'plan_generated', {})
+  return jsonResponse({ task_id: taskId, plan_status: 'ready', plan: result.plan })
+}
+
+export async function handleTaskFixPost(
+  env: Env,
+  tenantId: string,
+  auditRunId: string,
+  taskId: string
+): Promise<Response> {
+  const owns = await verifyAuditRunTenant(env.DB, auditRunId, tenantId)
+  if (!owns) return errorResponse('Audit run not found', 404)
+
+  const task = await env.DB
+    .prepare('SELECT task_id, status FROM tasks WHERE task_id = ? AND audit_run_id = ?')
+    .bind(taskId, auditRunId)
+    .first<{ task_id: string; status: string }>()
+  if (!task) return errorResponse('Task not found', 404)
+  if (task.status === 'done') return errorResponse('Task is already done', 400)
+
+  const { applyFixForTask } = await import('../workers/fix-agent')
+  const result = await applyFixForTask(taskId, env)
+  if (!result.ok) return errorResponse(result.error ?? 'Fix failed', 500)
+
+  await logTaskEvent(env.DB, tenantId, auditRunId, taskId, 'fix_applied', { branch: result.branch, commit_sha: result.commit_sha, pr_url: result.pr_url })
+  return jsonResponse({ task_id: taskId, status: 'in_review', branch: result.branch, commit_sha: result.commit_sha, pr_url: result.pr_url })
+}
+
 export async function handleFindingList(
   env: Env,
   tenantId: string,

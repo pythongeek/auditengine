@@ -89,7 +89,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at       INTEGER NOT NULL DEFAULT (unixepoch()),
   conflict_flag    INTEGER NOT NULL DEFAULT 0,
   conflict_reason  TEXT,
-  lock_expires_at  INTEGER
+  lock_expires_at  INTEGER,
+  plan_text        TEXT,
+  plan_status      TEXT NOT NULL DEFAULT 'none'
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_run_status ON tasks(tenant_id, audit_run_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_run_status ON tasks(audit_run_id, status);

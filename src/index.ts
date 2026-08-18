@@ -45,6 +45,8 @@ import {
   handleTaskList,
   handleTaskPatch,
   handleTaskVerify,
+  handleTaskPlanPost,
+  handleTaskFixPost,
   handleFindingList,
   handleFindingPatch,
   handleGitHubWebhook,
@@ -319,6 +321,18 @@ async function dispatchRoute(request: Request, env: Env, tenantId: string, ctx?:
       body = {}
     }
     return handleTaskVerify(env, tenantId, taskVerifyMatch[2], taskVerifyMatch[3], body)
+  }
+
+  const taskPlanMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)\/plan$/)
+  if (taskPlanMatch && request.method === 'POST') {
+    if (tenantId !== taskPlanMatch[1]) return errorResponse('Cannot access another tenant audit', 403, 'FORBIDDEN')
+    return handleTaskPlanPost(env, tenantId, taskPlanMatch[2], taskPlanMatch[3])
+  }
+
+  const taskFixMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)\/fix$/)
+  if (taskFixMatch && request.method === 'POST') {
+    if (tenantId !== taskFixMatch[1]) return errorResponse('Cannot access another tenant audit', 403, 'FORBIDDEN')
+    return handleTaskFixPost(env, tenantId, taskFixMatch[2], taskFixMatch[3])
   }
 
   const findingsMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/findings$/)
@@ -614,6 +628,11 @@ export default {
       return handleProtectedRoute(request, env, taskVerifyMatch[1])
     }
 
+    const taskPlanMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)\/(plan|fix)$/)
+    if (taskPlanMatch && request.method === 'POST') {
+      return handleProtectedRoute(request, env, taskPlanMatch[1])
+    }
+
     const findingsMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/findings$/)
     if (findingsMatch && request.method === 'GET') {
       return handleProtectedRoute(request, env, findingsMatch[1])
@@ -625,6 +644,31 @@ export default {
     }
 
     return new Response('AuditEngine v1.0', { status: 200 })
+  },
+
+  // Hourly cron (see [triggers] in wrangler.toml): re-audit every repository
+  // that has a completed audit session, so regressions are caught automatically.
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    const hourSlot = Math.floor(Date.now() / 3_600_000)
+    const rows = await env.DB
+      .prepare(`
+        SELECT s.id, s.tenant_id, MAX(s.created_at)
+        FROM audit_sessions s
+        WHERE s.repo_url IS NOT NULL AND s.repo_url != '' AND s.status = 'complete'
+        GROUP BY s.tenant_id, s.repo_url
+      `)
+      .all<{ id: string; tenant_id: string }>()
+
+    for (const row of rows.results ?? []) {
+      try {
+        await env.CONTINUOUS_AUDIT_WORKFLOW.create({
+          id: `continuous-${row.id}-${hourSlot}`,
+          params: { auditRunId: row.id, tenantId: row.tenant_id },
+        })
+      } catch {
+        // A duplicate instance id means this hour's re-audit already exists.
+      }
+    }
   },
 
   async queue(batch: MessageBatch<QueuedWriteRequest>, env: Env): Promise<void> {

@@ -175,7 +175,7 @@ describe('Workflows', () => {
 
     await workflow.run({ payload: { auditRunId: 'run-001' } } as unknown as Parameters<typeof workflow.run>[0], step)
 
-    expect(names).toEqual(['resolve-priorities'])
+    expect(names).toEqual(['resolve-priorities', 'generate-remediation-plans'])
   })
 
   it('SalvationWorkflow delegates to runSalvationProtocol', async () => {

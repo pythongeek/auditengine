@@ -6,6 +6,7 @@ import { runGate } from '../lib/gate'
 import { getChunk } from '../lib/r2-storage'
 import { isCriticalAgentType } from '../lib/agent-config'
 import { LRUCache } from '../lib/cache'
+import { defaultConstitution } from '../lib/default-constitution'
 
 export const DOMAIN_MAP: Record<AgentType, string> = {
   security:      "backend",
@@ -77,6 +78,9 @@ export async function tick(
           'error',
           { error_type: 'missing_constitution', path: constitutionKey }
         )
+        // Fall back to an embedded generic constitution so the audit still
+        // runs; upload the full constitutions with `npm run upload-constitutions`.
+        constitutionText = defaultConstitution(state.agentType)
       } else {
         constitutionText = await constitutionObj.text()
       }
@@ -114,8 +118,8 @@ export async function tick(
 
       const filePath = state.fileQueue[state.queueCursor]
       const claimResult = await env.DB
-        .prepare('INSERT OR IGNORE INTO claims (audit_run_id, agent_id, file_path) VALUES (?, ?, ?)')
-        .bind(state.auditRunId, state.agentId, filePath)
+        .prepare('INSERT OR IGNORE INTO claims (tenant_id, audit_run_id, agent_id, file_path) VALUES (?, ?, ?, ?)')
+        .bind(state.tenantId ?? '', state.auditRunId, state.agentId, filePath)
         .run()
 
       if (claimResult.meta?.changes === 0) {
@@ -718,19 +722,54 @@ export class AgentDurableObject extends DurableObject<Env> {
     }
 
     let previousState = state.state
-    while (state.state !== 'done' && state.state !== 'paused') {
-      state = await tick(state, this.env, broadcast, this.chunkCache)
-      if (state.state !== previousState) {
-        await writeAuditLog(
-          this.env.DB,
-          tenantId ?? '',
-          auditRunId,
-          agentId,
-          'state_change',
-          { from: previousState, to: state.state }
-        )
-        previousState = state.state
+    try {
+      while (state.state !== 'done' && state.state !== 'paused') {
+        state = await tick(state, this.env, broadcast, this.chunkCache)
+        if (state.state !== previousState) {
+          await writeAuditLog(
+            this.env.DB,
+            tenantId ?? '',
+            auditRunId,
+            agentId,
+            'state_change',
+            { from: previousState, to: state.state }
+          )
+          previousState = state.state
+        }
       }
+    } catch (err) {
+      // Never fail silently: record the error, mark the registry row, and tell
+      // the dashboard. Without this a missing API key or provider outage left
+      // agents stuck in 'idle' forever with no visible feedback.
+      const message = err instanceof Error ? err.message : 'Unknown agent error'
+      try {
+        await this.env.DB
+          .prepare("UPDATE agent_registry SET status = 'error' WHERE agent_id = ?")
+          .bind(agentId)
+          .run()
+        await this.env.DB
+          .prepare('INSERT INTO agent_errors (tenant_id, audit_run_id, agent_id, error_type, error_msg, file_path) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(tenantId ?? '', auditRunId, agentId, 'agent_crashed', message, state.currentFile ?? '')
+          .run()
+        await writeAuditLog(this.env.DB, tenantId ?? '', auditRunId, agentId, 'agent_crashed', {
+          message,
+          state: state.state,
+          file: state.currentFile,
+        })
+        broadcast({
+          type: 'agent_error',
+          audit_run_id: auditRunId,
+          agent_id: agentId,
+          payload: { message, state: state.state, file: state.currentFile },
+          ts: Date.now(),
+        })
+      } catch {
+        // error recording itself failed — nothing more we can do
+      }
+      return new Response(JSON.stringify({ status: 'error', agentId, error: message }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
 
     return new Response(JSON.stringify({ status: state.state, agentId }), {

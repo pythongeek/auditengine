@@ -66,6 +66,9 @@ export const TASK_BOARD_HTML = `<!DOCTYPE html>
     .task.dragging { opacity: 0.5; }
     .task .id { font-weight: 600; margin-bottom: 0.2rem; }
     .task .info { color: var(--muted); font-size: 0.75rem; }
+    .task .actions { display: flex; gap: 0.3rem; margin-top: 0.4rem; }
+    .task .mini { flex: 1; padding: 0.25rem 0.3rem; font-size: 0.7rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+    .task .mini:hover { border-color: var(--accent); color: var(--accent); }
     .task .conflict { background: var(--red); color: #fff; font-size: 0.65rem; padding: 0.05rem 0.3rem; border-radius: 3px; margin-left: 0.3rem; }
     .modal-overlay {
       position: fixed;
@@ -135,6 +138,14 @@ export const TASK_BOARD_HTML = `<!DOCTYPE html>
     </div>
   </div>
 
+  <div id="planModal" class="modal-overlay">
+    <div class="modal">
+      <h3>Remediation plan</h3>
+      <pre id="planBody" style="white-space:pre-wrap;max-height:50vh;overflow:auto;text-align:left"></pre>
+      <button class="cancel" id="closePlan">Close</button>
+    </div>
+  </div>
+
   <script>
     const token = localStorage.getItem('auditengine_token');
     const tenantId = localStorage.getItem('auditengine_tenant');
@@ -177,11 +188,58 @@ export const TASK_BOARD_HTML = `<!DOCTYPE html>
         el.dataset.taskId = task.task_id;
         el.dataset.status = task.status;
         el.innerHTML = '<div class="id">#' + task.task_id.slice(-6) + (task.conflict_flag ? '<span class="conflict">CONFLICT</span>' : '') + '</div>' +
-          '<div class="info">score ' + (task.priority_score || 0) + ' · ' + (task.assigned_agent || 'unassigned') + '</div>';
+          '<div class="info">score ' + (task.priority_score || 0) + ' · ' + (task.assigned_agent || 'unassigned') + '</div>' +
+          '<div class="actions">' +
+            '<button class="mini" data-act="plan">' + (task.plan_status === 'ready' ? 'View Plan' : 'AI Plan') + '</button>' +
+            '<button class="mini" data-act="fix">Apply Fix → PR</button>' +
+          '</div>';
+        el.querySelector('[data-act="plan"]').addEventListener('click', (e) => { e.stopPropagation(); openPlan(task); });
+        el.querySelector('[data-act="fix"]').addEventListener('click', (e) => { e.stopPropagation(); applyFix(task.task_id); });
         el.addEventListener('dragstart', () => el.classList.add('dragging'));
         el.addEventListener('dragend', () => el.classList.remove('dragging'));
         col.appendChild(el);
       });
+    }
+
+    const planModal = document.getElementById('planModal');
+    async function openPlan(task) {
+      document.getElementById('planBody').textContent = task.plan_text || 'No plan yet — generating…';
+      planModal.classList.add('active');
+      if (task.plan_status !== 'ready') {
+        try {
+          const res = await fetch(basePath + '/tasks/' + task.task_id + '/plan', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token }
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Plan generation failed');
+          task.plan_text = data.plan;
+          task.plan_status = 'ready';
+          document.getElementById('planBody').textContent = data.plan;
+          render();
+        } catch (err) {
+          document.getElementById('planBody').textContent = 'Plan failed: ' + err.message;
+        }
+      }
+    }
+    document.getElementById('closePlan').addEventListener('click', () => planModal.classList.remove('active'));
+
+    async function applyFix(taskId) {
+      if (!confirm('Generate fixes with the AI fix agent, commit them to a new branch, and open a PR/MR?')) return;
+      document.getElementById('error').textContent = 'Fix agent running — this can take a minute…';
+      try {
+        const res = await fetch(basePath + '/tasks/' + taskId + '/fix', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fix failed');
+        document.getElementById('error').textContent = '';
+        alert('Fix committed. PR: ' + (data.pr_url || data.commit_sha));
+        loadTasks();
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
     }
 
     document.querySelectorAll('.column').forEach(col => {

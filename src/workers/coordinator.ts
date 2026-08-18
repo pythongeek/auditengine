@@ -164,9 +164,11 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
           .prepare("UPDATE audit_sessions SET status = 'running', started_at = unixepoch() WHERE id = ?")
           .bind(this.auditRunId)
           .run()
-        const phase1Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db, ['architecture', 'database'])
+        // Phase 1: foundation + configuration specialists.
+        const phase1Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db,
+          ['architecture', 'database', 'configuration', 'dependency'])
         for (const agentType of phase1Agents) {
-          await spawnAgent(agentType, 1, this.tenantId, this.auditRunId, env)
+          this.spawnDetached(agentType, 1)
         }
         await db
           .prepare("UPDATE run_budget SET phase = 'phase-1' WHERE audit_run_id = ?")
@@ -179,13 +181,17 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
     else if (currentPhase === 'phase-1') {
       const allDone = await allAgentsDoneInPhase(this.auditRunId, 1, db)
       if (allDone) {
-        const phase2Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db, ['security', 'api', 'frontend', 'devops'])
+        // Phase 2: correctness + security specialists.
+        const phase2Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db,
+          ['security', 'api', 'frontend', 'backend', 'devops', 'error_handling'])
         for (const agentType of phase2Agents) {
-          await spawnAgent(agentType, 2, this.tenantId, this.auditRunId, env)
+          this.spawnDetached(agentType, 2)
         }
         const visualQaRelevant = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db, ['visual_qa'])
         if (visualQaRelevant.length > 0) {
-          await spawnVisualQA(this.auditRunId, env)
+          this.ctx.waitUntil(spawnVisualQA(this.auditRunId, env).catch(() => {
+            // visual QA failures are non-fatal to the audit pipeline
+          }))
         }
         await db
           .prepare("UPDATE run_budget SET phase = 'phase-2' WHERE audit_run_id = ?")
@@ -202,9 +208,11 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
           id: `priority-resolver-${this.auditRunId}`,
           params: { auditRunId: this.auditRunId },
         })
-        const phase3Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db, ['documentation', 'performance'])
+        // Phase 3: quality + hygiene specialists (the remaining agent types).
+        const phase3Agents = await getRelevantAgentsForPhase(this.auditRunId, this.tenantId, db,
+          ['documentation', 'performance', 'testing', 'logging', 'code_quality', 'a11y', 'i18n', 'refactoring'])
         for (const agentType of phase3Agents) {
-          await spawnAgent(agentType, 3, this.tenantId, this.auditRunId, env)
+          this.spawnDetached(agentType, 3)
         }
         await db
           .prepare("UPDATE run_budget SET phase = 'phase-3' WHERE audit_run_id = ?")
@@ -302,6 +310,26 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
     })).catch(() => {
       // broadcast failures are non-fatal
     })
+  }
+
+  /**
+   * Spawn an agent without blocking the alarm handler on the agent's entire
+   * lifecycle. The agent DO runs its own state machine; the coordinator learns
+   * about completion from agent_registry on subsequent alarm ticks. Failures
+   * are recorded in agent_errors instead of killing the alarm.
+   */
+  private spawnDetached(agentType: AgentType, phase: number): void {
+    const promise = spawnAgent(agentType, phase, this.tenantId, this.auditRunId, this.env).catch(async (err) => {
+      try {
+        await this.env.DB
+          .prepare('INSERT INTO agent_errors (tenant_id, audit_run_id, agent_id, error_type, error_msg, file_path) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(this.tenantId, this.auditRunId, `${agentType}-spawn`, 'spawn_error', err instanceof Error ? err.message : 'Unknown spawn error', '')
+          .run()
+      } catch {
+        // logging failure is non-fatal
+      }
+    })
+    this.ctx.waitUntil(promise)
   }
 }
 
@@ -411,7 +439,7 @@ async function allAgentsDoneInPhase(auditRunId: string, phase: number, db: D1Dat
   const done = await db
     .prepare(`
       SELECT COUNT(*) as count FROM agent_registry
-      WHERE audit_run_id = ? AND phase = ? AND status = 'done'
+      WHERE audit_run_id = ? AND phase = ? AND status IN ('done', 'error')
     `)
     .bind(auditRunId, phase)
     .first<{ count: number }>()

@@ -65,6 +65,12 @@ export function getRoutingConfig(
     case 'task_description':
       return { model: 'minimax-m3', provider: 'minimax', maxTokens: 6_000, budget: 6_000, taskType }
 
+    case 'remediation_plan':
+      return { model: 'kimi-k2.6', provider: 'kimi', maxTokens: 20_000, budget: 20_000, taskType }
+
+    case 'code_fix':
+      return { model: 'kimi-k2.6', provider: 'kimi', maxTokens: 60_000, budget: 60_000, taskType }
+
     case 'qa_script_gen':
     case 'visual_qa_script':
       return { model: 'minimax-m3', provider: 'minimax', maxTokens: 16_000, budget: 16_000, taskType }

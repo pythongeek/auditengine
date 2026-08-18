@@ -11,7 +11,8 @@
     "e2e:install": "playwright install chromium",
     "e2e": "playwright test",
     "load-test": "tsx scripts/load-test.ts",
-    "security-audit": "tsx scripts/security-audit.ts"
+    "security-audit": "tsx scripts/security-audit.ts",
+    "upload-constitutions": "bash scripts/upload-constitutions.sh"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^0.0.14",
