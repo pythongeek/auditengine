@@ -6,6 +6,33 @@ import * as bitbucket from './bitbucket'
 
 export type GitProvider = 'github' | 'gitlab' | 'bitbucket'
 
+export async function listRepoFiles(
+  repoUrl: string,
+  branch: string | undefined,
+  tenantId: string,
+  env: Env
+): Promise<Array<{ path: string; type: string }>> {
+  const provider = getProvider(repoUrl)
+  if (!provider) {
+    throw new Error(`Unsupported git provider URL: ${repoUrl}`)
+  }
+
+  switch (provider) {
+    case 'github': {
+      const token = await github.getTokenForTenant(env.DB, tenantId, env)
+      return github.listRepoFiles(repoUrl, branch, token)
+    }
+    case 'gitlab': {
+      const token = await gitlab.getTokenForTenant(env.DB, tenantId, env)
+      return gitlab.listRepoFiles(repoUrl, branch, token)
+    }
+    case 'bitbucket': {
+      const token = await bitbucket.getTokenForTenant(env.DB, tenantId, env)
+      return bitbucket.listRepoFiles(repoUrl, branch, token)
+    }
+  }
+}
+
 export function getProvider(repoUrl: string): GitProvider | null {
   if (repoUrl.includes('github.com')) return 'github'
   if (repoUrl.includes('gitlab.com')) return 'gitlab'

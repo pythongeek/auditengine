@@ -63,7 +63,7 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
       font-size: 0.85rem;
     }
     .hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }
-    .row { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; }
+    .row { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; flex-wrap: wrap; }
     .btn {
       padding: 0.7rem 1.4rem;
       background: var(--accent);
@@ -98,6 +98,59 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
       cursor: pointer;
     }
     .repo-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .repo-field-row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+    .repo-field-row .field { flex: 1; min-width: 220px; }
+    .repo-field-row .btn { margin-bottom: 0.1rem; }
+    .file-list {
+      margin-top: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .file-list-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 1;
+      flex-wrap: wrap;
+    }
+    .file-list-toolbar input {
+      flex: 1;
+      min-width: 160px;
+      padding: 0.4rem 0.5rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+    }
+    .file-list-toolbar .actions { display: flex; gap: 0.75rem; font-size: 0.85rem; }
+    .file-list-toolbar a { color: var(--accent); text-decoration: none; cursor: pointer; }
+    .file-list-toolbar a:hover { text-decoration: underline; }
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem;
+    }
+    .file-item:last-child { border-bottom: none; }
+    .file-item input[type="checkbox"] { cursor: pointer; }
+    .file-item label { margin: 0; font-weight: normal; cursor: pointer; flex: 1; }
+    .file-list-empty { padding: 1rem; color: var(--muted); font-size: 0.85rem; text-align: center; }
+    .file-list-count { color: var(--muted); font-size: 0.8rem; }
+    .file-list-error { color: var(--red); margin-top: 0.5rem; font-size: 0.85rem; }
+    .file-list-loading { color: var(--muted); margin-top: 0.5rem; font-size: 0.85rem; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
@@ -126,12 +179,31 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
 
     <div class="card">
       <label for="repoUrl">Git Repository URL</label>
-      <input type="text" id="repoUrl" placeholder="https://github.com/owner/repo" />
+      <div class="repo-field-row">
+        <div class="field">
+          <input type="text" id="repoUrl" placeholder="https://github.com/owner/repo" />
+        </div>
+        <div class="field">
+          <label for="branch" style="margin-top: 0;">Branch (optional)</label>
+          <input type="text" id="branch" placeholder="main" />
+        </div>
+        <button class="btn secondary" id="loadFilesBtn" type="button">Load files</button>
+      </div>
       <div class="hint">Enter a GitHub, GitLab, or Bitbucket repo URL to audit it directly. Leave blank to upload/paste files instead. Make sure a Git provider token is saved in <a href="/settings" style="color: var(--accent);">Settings</a> for private repos.</div>
 
-      <label for="branch" style="margin-top: 1rem;">Branch (optional)</label>
-      <input type="text" id="branch" placeholder="main" />
-      <div class="hint">Defaults to the repo’s default branch. Leave blank unless you need a specific branch.</div>
+      <div id="fileListSection" class="hidden">
+        <div class="file-list-toolbar">
+          <input type="text" id="fileFilter" placeholder="Filter files…" />
+          <div class="actions">
+            <a id="selectAll">Select all</a>
+            <a id="selectNone">Select none</a>
+          </div>
+        </div>
+        <div class="file-list" id="fileListBox"></div>
+        <div class="file-list-count" id="fileListCount"></div>
+        <div class="file-list-loading hidden" id="fileListLoading">Loading files…</div>
+        <div class="file-list-error hidden" id="fileListError"></div>
+      </div>
 
       <div id="recentRepos" style="margin-top: 1rem;"></div>
     </div>
@@ -169,6 +241,15 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
     const loginWarning = document.getElementById('loginWarning');
     const tokenStatus = document.getElementById('tokenStatus');
     const recentRepos = document.getElementById('recentRepos');
+    const loadFilesBtn = document.getElementById('loadFilesBtn');
+    const fileListSection = document.getElementById('fileListSection');
+    const fileListBox = document.getElementById('fileListBox');
+    const fileFilter = document.getElementById('fileFilter');
+    const selectAll = document.getElementById('selectAll');
+    const selectNone = document.getElementById('selectNone');
+    const fileListCount = document.getElementById('fileListCount');
+    const fileListLoading = document.getElementById('fileListLoading');
+    const fileListError = document.getElementById('fileListError');
 
     const token = localStorage.getItem('auditengine_token');
     const tenantId = localStorage.getItem('auditengine_tenant');
@@ -176,15 +257,25 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
     if (!token || !tenantId) {
       loginWarning.style.display = 'block';
       startBtn.disabled = true;
+      loadFilesBtn.disabled = true;
     } else {
       tokenStatus.textContent = 'Tenant: ' + tenantId;
     }
 
     const params = new URLSearchParams(location.search);
     const prefillRepo = params.get('repo');
+    const prefillBranch = params.get('branch');
+    const autoSelect = params.get('select') === '1';
     if (prefillRepo) {
       repoUrlInput.value = prefillRepo;
     }
+    if (prefillBranch) {
+      branchInput.value = prefillBranch;
+    }
+
+    let loadedRepoFiles = [];
+    let loadedRepoUrl = '';
+    let loadedBranch = '';
 
     async function loadRecentRepos() {
       if (!token || !tenantId) return;
@@ -205,6 +296,127 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
       }
     }
     loadRecentRepos();
+
+    function extractPaths(data) {
+      const files = data && Array.isArray(data.files) ? data.files : (Array.isArray(data) ? data : []);
+      return files.map(f => (typeof f === 'string' ? f : (f && f.path ? f.path : null))).filter(Boolean);
+    }
+
+    function renderFileList(paths) {
+      loadedRepoFiles = paths.map(p => ({ path: p, selected: true }));
+      fileListSection.classList.remove('hidden');
+      applyFileFilter();
+      updateSelectedCount();
+    }
+
+    function applyFileFilter() {
+      const q = (fileFilter.value || '').trim().toLowerCase();
+      const visible = loadedRepoFiles.filter(f => !q || f.path.toLowerCase().includes(q));
+      if (visible.length === 0) {
+        fileListBox.innerHTML = '<div class="file-list-empty">No files match.</div>';
+        return;
+      }
+      fileListBox.innerHTML = visible.map((f, i) => \`
+        <div class="file-item">
+          <input type="checkbox" id="f\${i}" data-path="\${escapeHtml(f.path)}" \${f.selected ? 'checked' : ''} />
+          <label for="f\${i}">\${escapeHtml(f.path)}</label>
+        </div>
+      \`).join('');
+      fileListBox.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const item = loadedRepoFiles.find(f => f.path === cb.dataset.path);
+          if (item) item.selected = cb.checked;
+          updateSelectedCount();
+        });
+      });
+    }
+
+    function updateSelectedCount() {
+      const selected = loadedRepoFiles.filter(f => f.selected).length;
+      const total = loadedRepoFiles.length;
+      fileListCount.textContent = total ? \`\${selected} of \${total} selected\` : '';
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    async function loadRepoFiles() {
+      if (!token) {
+        fileListError.textContent = 'Please log in first.';
+        fileListError.classList.remove('hidden');
+        return;
+      }
+      const repoUrl = repoUrlInput.value.trim();
+      if (!repoUrl) {
+        fileListError.textContent = 'Enter a repository URL first.';
+        fileListError.classList.remove('hidden');
+        return;
+      }
+      const branch = branchInput.value.trim();
+      fileListLoading.classList.remove('hidden');
+      fileListError.classList.add('hidden');
+      loadFilesBtn.disabled = true;
+      try {
+        const res = await fetch('/api/v1/repo/files', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + token,
+          },
+          body: JSON.stringify({ repo_url: repoUrl, branch: branch || undefined }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || data.message || \`HTTP \${res.status}\`);
+        }
+        const paths = extractPaths(data);
+        loadedRepoUrl = repoUrl;
+        loadedBranch = branch;
+        if (paths.length === 0) {
+          fileListError.textContent = 'No files found in repository.';
+          fileListError.classList.remove('hidden');
+          fileListSection.classList.add('hidden');
+        } else {
+          renderFileList(paths);
+        }
+      } catch (err) {
+        fileListError.textContent = err.message;
+        fileListError.classList.remove('hidden');
+        fileListSection.classList.add('hidden');
+      } finally {
+        fileListLoading.classList.add('hidden');
+        loadFilesBtn.disabled = false;
+      }
+    }
+
+    loadFilesBtn.addEventListener('click', loadRepoFiles);
+
+    fileFilter.addEventListener('input', applyFileFilter);
+
+    selectAll.addEventListener('click', (e) => {
+      e.preventDefault();
+      const q = (fileFilter.value || '').trim().toLowerCase();
+      loadedRepoFiles.forEach(f => {
+        if (!q || f.path.toLowerCase().includes(q)) f.selected = true;
+      });
+      applyFileFilter();
+      updateSelectedCount();
+    });
+
+    selectNone.addEventListener('click', (e) => {
+      e.preventDefault();
+      const q = (fileFilter.value || '').trim().toLowerCase();
+      loadedRepoFiles.forEach(f => {
+        if (!q || f.path.toLowerCase().includes(q)) f.selected = false;
+      });
+      applyFileFilter();
+      updateSelectedCount();
+    });
+
+    if (autoSelect && prefillRepo) {
+      loadRepoFiles();
+    }
 
     let selectedFiles = [];
 
@@ -251,6 +463,10 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
         if (repoUrl) {
           body.repo_url = repoUrl;
           if (branch) body.branch = branch;
+          if (loadedRepoFiles.length > 0 && repoUrl === loadedRepoUrl && branch === loadedBranch) {
+            const selected = loadedRepoFiles.filter(f => f.selected).map(f => f.path);
+            body.selected_paths = selected;
+          }
         } else {
           let filesPayload;
           const pasted = pasteArea.value.trim();

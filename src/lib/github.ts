@@ -35,14 +35,16 @@ export async function fetchRepoFiles(
   const ref = branch || parsed.ref
   const url = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/zipball/${ref}`
 
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: 'application/vnd.github.v3+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'AuditEngine/1.0',
-    },
-  })
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'AuditEngine/1.0',
+  }
+  if (githubToken) {
+    headers.Authorization = `Bearer ${githubToken}`
+  }
+
+  const res = await fetch(url, { headers })
 
   if (!res.ok) {
     const text = await res.text().catch(() => 'unknown error')
@@ -72,6 +74,42 @@ function findCommonPrefix(paths: string[]): string | null {
   return null
 }
 
+export async function listRepoFiles(
+  repoUrl: string,
+  branch: string | undefined,
+  githubToken: string
+): Promise<Array<{ path: string; type: string }>> {
+  const parsed = parseRepoUrl(repoUrl, branch)
+  if (!parsed) {
+    throw new Error(`Unsupported repo URL: ${repoUrl}`)
+  }
+
+  const ref = branch || parsed.ref
+  const url = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`
+
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': 'AuditEngine/1.0',
+  }
+  if (githubToken) {
+    headers.Authorization = `Bearer ${githubToken}`
+  }
+
+  const res = await fetch(url, { headers })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => 'unknown error')
+    throw new Error(`GitHub list files failed: ${res.status} ${text}`)
+  }
+
+  const data = await res.json() as { tree?: Array<{ path: string; type: string }> }
+  if (!data.tree || !Array.isArray(data.tree)) {
+    return []
+  }
+
+  return data.tree.filter(t => t.type === 'blob').map(t => ({ path: t.path, type: t.type }))
+}
+
 export async function fetchFileContent(
   owner: string,
   repo: string,
@@ -81,13 +119,15 @@ export async function fetchFileContent(
 ): Promise<string | null> {
   const encodedPath = path.split('/').map(encodeURIComponent).join('/')
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: 'application/vnd.github.v3+json',
-      'User-Agent': 'AuditEngine/1.0',
-    },
-  })
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': 'AuditEngine/1.0',
+  }
+  if (githubToken) {
+    headers.Authorization = `Bearer ${githubToken}`
+  }
+
+  const res = await fetch(url, { headers })
 
   if (res.status !== 200) return null
   const data = await res.json() as { content?: string; encoding?: string }
@@ -104,13 +144,14 @@ export async function fetchDiff(
   githubToken: string
 ): Promise<unknown> {
   const url = `https://api.github.com/repos/${owner}/${repo}/commits/${commitSha}`
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: 'application/vnd.github.v3+json',
-      'User-Agent': 'AuditEngine/1.0',
-    },
-  })
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': 'AuditEngine/1.0',
+  }
+  if (githubToken) {
+    headers.Authorization = `Bearer ${githubToken}`
+  }
+  const res = await fetch(url, { headers })
 
   if (res.status !== 200) return null
   return res.json()

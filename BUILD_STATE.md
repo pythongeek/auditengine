@@ -1,6 +1,6 @@
 # AuditEngine BUILD_STATE
 Last updated: 2026-08-18
-Session number: 53
+Session number: 56
 Tool: Kimi Code
 
 ## STATUS KEY
@@ -72,7 +72,7 @@ Tool: Kimi Code
 | src/dashboard/audit-new.html | ✅ | S16 — audit start form with file upload/paste |
 | src/dashboard/dashboard-html.ts | ✅ | Generated module for DASHBOARD_HTML |
 | src/dashboard/home-html.ts | ✅ | Generated module for HOME_HTML |
-| src/dashboard/audit-new-html.ts | ✅ | Generated module for AUDIT_NEW_HTML |
+| src/dashboard/audit-new-html.ts | ✅ | S16 + S55 — audit start form with repo URL, branch, loadable file tree, and selected-path audits |
 
 ## PHASE F — MULTI-TENANCY FOUNDATION
 
@@ -475,6 +475,19 @@ Errors: 0
 Tests: 221 backend tests passed (gate 21, model-router 21, auth 6, ingestion 8, agent-config 7, secrets 10, token-budget 9, rate-limiter 10, queue 6, coordinator 8, base-agent 4, shared-memory 3, workflows 3, external-research 6, salvation 5, tasks 10, verification 8, git-diff 4, webhooks 7, github-oauth 4, gitlab 6, bitbucket 7, repo-groups 5, dashboard-api 7, security-audit 7, cache 2, load-test 1, openapi 2, llm-gateway 6, settings 6)
 Note: S52 fixed dashboard/task-board/finding-detail WebSocket auth by passing tenant JWT via query parameter; added AUDIT_START_WORKFLOW binding and new audit-start workflow so repo audits run in a long-lived Workflow instead of the HTTP request's waitUntil budget; file-only audits continue to use waitUntil; updated repo-groups test for the new flow; dashboard now redirects to /login when no token is present
 
+## S54 — REPO FILE TREE + SELECTED-PATH AUDITS
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/lib/github.ts | ✅ DONE | Added `listRepoFiles` using GitHub git/trees API with recursive=1; returns blob paths/types |
+| src/lib/gitlab.ts | ⚠️ PARTIAL | Added `listRepoFiles` TODO fallback to `fetchRepoFiles` + map; replace with REST tree API later |
+| src/lib/bitbucket.ts | ⚠️ PARTIAL | Added `listRepoFiles` TODO fallback to `fetchRepoFiles` + map; replace with REST src API later |
+| src/lib/git-router.ts | ✅ DONE | Added `listRepoFiles` provider dispatcher; falls back to `getRepoFiles` map for unsupported providers |
+| src/lib/router.ts | ✅ DONE | Added `handleRepoFileList`; `handleAuditStart` forwards `selected_paths` to workflow/ingestion |
+| src/workflows/audit-start-workflow.ts | ✅ DONE | `AuditStartPayload` includes `selected_paths`; passed to ingest request body |
+| src/workers/ingestion.ts | ✅ DONE | `parseRepoFiles` filters repo files by `selected_paths` when present |
+| src/index.ts | ✅ DONE | Wired `POST /api/v1/repo/files` as protected route through `dispatchRoute` |
+
 ## SCHEMA ALIGNMENT NOTES
 - New RFC/PRD-aligned tables added alongside existing tables (repo_manifest retained for backward compatibility).
 - files table mirrors repo_manifest with PRD-style column names (path, domain_tag, line_count, chunk_count, r2_key, content_hash).
@@ -543,3 +556,4 @@ Note: S52 fixed dashboard/task-board/finding-detail WebSocket auth by passing te
 | S51 | 2026-08-18 | Add User-Agent to GitHub API calls, improve ingestion error messages | src/lib/github.ts, src/lib/github-write.ts, src/lib/git-diff.ts, src/lib/router.ts, src/workers/ingestion.ts, BUILD_STATE.md | |
 | S52 | 2026-08-18 | Fix dashboard/task-board/finding-detail WebSocket auth with ?token; route repo audits through new AUDIT_START_WORKFLOW to avoid HTTP waitUntil/CPU limits; file-only audits keep waitUntil; update test helpers and repo-groups test | src/types/index.ts, src/lib/router.ts, src/index.ts, src/workflows/audit-start-workflow.ts, wrangler.toml, src/dashboard/dashboard-html.ts, src/dashboard/task-board-html.ts, src/dashboard/finding-detail-html.ts, test/helpers.ts, test/repo-groups.test.ts, BUILD_STATE.md | |
 | S53 | 2026-08-18 | Add /repos page to list and audit saved repositories; unify navigation across all dashboard pages; prefill repo URL on /audit/new; whitelist /repos in security audit; tests green | src/dashboard/repos-html.ts, src/lib/router.ts, src/index.ts, src/dashboard/home-html.ts, src/dashboard/settings-html.ts, src/dashboard/audit-new-html.ts, src/dashboard/dashboard-html.ts, src/dashboard/tenant-selector-html.ts, src/dashboard/audit-list-html.ts, src/dashboard/task-board-html.ts, src/dashboard/finding-detail-html.ts, scripts/security-audit.ts, BUILD_STATE.md | d482f70 |
+| S56 | 2026-08-18 | Repo file picker and specific-file audits: GitHub tree API, selected_paths filtering, /repos Audit/Audit-files actions, /audit/new loadable file tree, E2E tests + live smoke tests, GitHub public-repo support | src/lib/github.ts, src/lib/gitlab.ts, src/lib/bitbucket.ts, src/lib/git-router.ts, src/lib/router.ts, src/workflows/audit-start-workflow.ts, src/workers/ingestion.ts, src/index.ts, src/dashboard/repos-html.ts, src/dashboard/audit-new-html.ts, scripts/e2e-server.ts, test/e2e/helpers.ts, test/e2e/login.spec.ts, test/e2e/tenant-list.spec.ts, test/e2e/repo-audit.spec.ts, test/e2e/live-repo-audit.spec.ts, playwright.live.config.ts, test/e2e/*.png snapshots, BUILD_STATE.md | |

@@ -6,6 +6,8 @@ import { TASK_BOARD_HTML } from '../src/dashboard/task-board-html'
 import { FINDING_DETAIL_HTML } from '../src/dashboard/finding-detail-html'
 import { ONBOARDING_HTML } from '../src/dashboard/onboarding-html'
 import { SETTINGS_HTML } from '../src/dashboard/settings-html'
+import { REPOS_HTML } from '../src/dashboard/repos-html'
+import { AUDIT_NEW_HTML } from '../src/dashboard/audit-new-html'
 
 const PAGES: Record<string, string> = {
   '/login': LOGIN_HTML,
@@ -15,6 +17,8 @@ const PAGES: Record<string, string> = {
   '/finding': FINDING_DETAIL_HTML,
   '/onboarding': ONBOARDING_HTML,
   '/settings': SETTINGS_HTML,
+  '/repos': REPOS_HTML,
+  '/audit/new': AUDIT_NEW_HTML,
 }
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000

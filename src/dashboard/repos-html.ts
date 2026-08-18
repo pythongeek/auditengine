@@ -69,6 +69,8 @@ export const REPOS_HTML = `<!DOCTYPE html>
     }
     .btn:hover { background: var(--accent-hover); }
     .btn.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn.secondary:hover { border-color: var(--accent); color: var(--accent); }
+    .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     #error { color: var(--red); margin-bottom: 1rem; }
     #addForm { display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
     #addForm input { flex: 1; min-width: 220px; padding: 0.6rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
@@ -91,7 +93,7 @@ export const REPOS_HTML = `<!DOCTYPE html>
 
   <main>
     <h1>Repositories</h1>
-    <p class="subtitle">Audited repositories. Click <strong>Audit</strong> to start a new run, or add a new repo URL below.</p>
+    <p class="subtitle">Audited repositories. Click <strong>Audit all</strong> to audit the entire repo, or <strong>Audit files</strong> to choose specific files. Add a new repo URL below.</p>
 
     <div class="card">
       <form id="addForm">
@@ -131,7 +133,10 @@ export const REPOS_HTML = `<!DOCTYPE html>
             <div class="repo-url">\${r.url}</div>
             <div class="repo-meta">Last audit: \${r.lastAuditId || '—'} · \${r.auditCount} run\${r.auditCount === 1 ? '' : 's'}</div>
           </div>
-          <a class="btn" href="/audit/new?repo=\${encodeURIComponent(r.url)}">Audit</a>
+          <div class="actions">
+            <a class="btn" href="/audit/new?repo=\${encodeURIComponent(r.url)}">Audit all</a>
+            <a class="btn secondary" href="/audit/new?repo=\${encodeURIComponent(r.url)}&select=1">Audit files</a>
+          </div>
         </div>
       \`).join('');
     }

@@ -28,6 +28,17 @@ export async function getTokenForTenant(db: D1Database, tenantId: string, env: E
   return (await getGitProviderToken(db, PROVIDER, env.ENCRYPTION_KEY, env.GITLAB_TOKEN)) ?? ''
 }
 
+export async function listRepoFiles(
+  repoUrl: string,
+  branch: string | undefined,
+  gitlabToken: string
+): Promise<Array<{ path: string; type: string }>> {
+  // TODO: implement GitLab repository tree listing via /projects/:id/repository/tree
+  // Fallback to fetchRepoFiles and map to file list for now.
+  const files = await fetchRepoFiles(repoUrl, branch, gitlabToken)
+  return files.map(f => ({ path: f.path, type: 'blob' }))
+}
+
 export async function fetchRepoFiles(
   repoUrl: string,
   branch: string | undefined,

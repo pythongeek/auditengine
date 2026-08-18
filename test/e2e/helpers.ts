@@ -1,6 +1,6 @@
 import { type Page } from '@playwright/test'
 
-export type PageName = 'login' | 'tenants' | 'audits' | 'task-board' | 'finding' | 'onboarding' | 'settings'
+export type PageName = 'login' | 'tenants' | 'audits' | 'task-board' | 'finding' | 'onboarding' | 'settings' | 'repos' | 'audit-new' | 'home' | 'dashboard'
 
 export async function seedLocalStorage(page: Page, token: string, tenantId?: string): Promise<void> {
   await page.evaluate(
@@ -15,10 +15,10 @@ export async function seedLocalStorage(page: Page, token: string, tenantId?: str
 export async function loadPage(page: Page, name: PageName, path: string, token?: string, tenantId?: string): Promise<void> {
   if (token) {
     // Load a page on the same origin first to establish localStorage, then navigate to target
-    await page.goto('http://localhost:3000/login')
+    await page.goto('/login')
     await seedLocalStorage(page, token, tenantId)
   }
-  await page.goto(`http://localhost:3000${path}`)
+  await page.goto(path)
 }
 
 export function mockApiResponse(page: Page, urlOrPattern: string, body: unknown): ReturnType<Page['route']> {

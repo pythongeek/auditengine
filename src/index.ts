@@ -76,6 +76,7 @@ import {
   handleSettingsKeysGet,
   handleSettingsKeysPost,
   handleOpenApiGet,
+  handleRepoFileList,
   errorResponse,
 } from './lib/router'
 
@@ -153,6 +154,10 @@ function buildRequestFromQueue(message: QueuedWriteRequest): Request {
 
 async function dispatchRoute(request: Request, env: Env, tenantId: string, ctx?: ExecutionContext): Promise<Response> {
   const url = new URL(request.url)
+
+  if (url.pathname === '/api/v1/repo/files' && request.method === 'POST') {
+    return handleRepoFileList(env, request, tenantId)
+  }
 
   if (url.pathname === '/ingest' && request.method === 'POST') {
     return handleIngest(request, env, tenantId)
@@ -568,6 +573,10 @@ export default {
     }
     if (url.pathname === '/audit/start' && request.method === 'POST') {
       return handleProtectedRoute(request, env, null, { ctx })
+    }
+
+    if (url.pathname === '/api/v1/repo/files' && request.method === 'POST') {
+      return handleProtectedRoute(request, env, null)
     }
 
     const configMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/config$/)

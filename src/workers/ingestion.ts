@@ -275,6 +275,7 @@ interface ParsedRepoFiles {
   branch?: string
   commitSha?: string
   repoGroupId?: string
+  selectedPaths?: string[]
 }
 
 async function parseRepoFiles(request: Request, env: Env, tenantId: string): Promise<ParsedRepoFiles | Response> {
@@ -317,10 +318,17 @@ async function parseRepoFiles(request: Request, env: Env, tenantId: string): Pro
     const branch = typeof b.branch === 'string' ? b.branch : undefined
     const commitSha = typeof b.commit_sha === 'string' ? b.commit_sha : undefined
     const repoGroupId = typeof b.repo_group_id === 'string' ? b.repo_group_id : undefined
+    const selectedPaths = Array.isArray(b.selected_paths) && b.selected_paths.every((p: unknown) => typeof p === 'string')
+      ? (b.selected_paths as string[])
+      : undefined
     try {
-      const files = await getRepoFiles(b.repo_url, branch, tenantId, env)
+      let files = await getRepoFiles(b.repo_url, branch, tenantId, env)
+      if (selectedPaths && selectedPaths.length > 0) {
+        const selectedSet = new Set(selectedPaths)
+        files = files.filter(f => selectedSet.has(f.path))
+      }
       const auditRunId = typeof b.audit_run_id === 'string' ? b.audit_run_id : `github-${Date.now()}`
-      return { auditRunId, files, repoUrl: b.repo_url, branch, commitSha, repoGroupId }
+      return { auditRunId, files, repoUrl: b.repo_url, branch, commitSha, repoGroupId, selectedPaths }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch repository files'
       return new Response(JSON.stringify({ error: msg }), {

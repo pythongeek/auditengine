@@ -3,15 +3,15 @@ import { loadPage, mockApiResponse, mockApiFailure } from './helpers'
 
 test.describe('login page', () => {
   test('stores token and redirects on valid login', async ({ page }) => {
-    await mockApiResponse(page, '**/api/v1/tenants', {
-      tenants: [{ id: 'tenant-1', name: 'tenant-1', plan: 'free' }],
+    await mockApiResponse(page, '**/api/v1/tenant', {
+      tenant: { id: 'tenant-1', name: 'tenant-1', plan: 'free' },
     })
     await loadPage(page, 'login', '/login')
 
     await page.fill('#token', 'valid-token')
     await page.click('button[type="submit"]')
 
-    await expect(page).toHaveURL('http://localhost:3000/tenants')
+    await expect(page).toHaveURL('/tenants')
     expect(await page.evaluate(() => localStorage.getItem('auditengine_token'))).toBe('valid-token')
   })
 

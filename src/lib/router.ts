@@ -22,6 +22,7 @@ import { createBranch, commitFiles, createPullRequest, type RepoFileChange } fro
 import { getTokenForTenant as getGitHubTokenForTenant } from './github'
 import { getTokenForTenant as getGitLabTokenForTenant } from './gitlab'
 import { getTokenForTenant as getBitbucketTokenForTenant } from './bitbucket'
+import { listRepoFiles } from './git-router'
 
 const validAgentTypes = new Set<AgentType>(ALL_AGENT_TYPES)
 
@@ -176,6 +177,31 @@ export async function handleIngest(request: Request, env: Env, tenantId: string)
   return ingestionWorker.fetch(withTenantHeader(request, tenantId), env)
 }
 
+export async function handleRepoFileList(env: Env, request: Request, tenantId: string): Promise<Response> {
+  let body: {
+    repo_url?: string
+    branch?: string
+  } = {}
+
+  try {
+    const text = await request.text().catch(() => '')
+    try {
+      body = JSON.parse(text) as typeof body
+    } catch {
+      return errorResponse('Invalid JSON', 400)
+    }
+
+    if (typeof body.repo_url !== 'string' || body.repo_url.length === 0) {
+      return errorResponse('Missing repo_url', 400)
+    }
+
+    const files = await listRepoFiles(body.repo_url, body.branch, tenantId, env)
+    return jsonResponse({ files })
+  } catch (err) {
+    return errorResponse(err instanceof Error ? err.message : 'Failed to list repository files', 500)
+  }
+}
+
 export async function handleAuditStart(request: Request, env: Env, tenantId: string, ctx?: ExecutionContext): Promise<Response> {
   let body: {
     audit_run_id?: string
@@ -184,6 +210,7 @@ export async function handleAuditStart(request: Request, env: Env, tenantId: str
     branch?: string
     commit_sha?: string
     repo_group_id?: string
+    selected_paths?: string[]
   } = {}
 
   try {
@@ -219,6 +246,7 @@ export async function handleAuditStart(request: Request, env: Env, tenantId: str
           branch: body.branch,
           commit_sha: body.commit_sha,
           repo_group_id: body.repo_group_id,
+          selected_paths: body.selected_paths,
         },
       })
       return jsonResponse({ audit_run_id: body.audit_run_id, status: 'queued' }, 202)
@@ -236,6 +264,7 @@ export async function handleAuditStart(request: Request, env: Env, tenantId: str
             branch: body.branch,
             commit_sha: body.commit_sha,
             repo_group_id: body.repo_group_id,
+            selected_paths: body.selected_paths,
           }),
           headers: { 'Content-Type': 'application/json' },
         })
