@@ -157,7 +157,7 @@ describe('ingestion worker', () => {
     const { runs } = env.DB as unknown as { runs: { sql: string; params: unknown[] }[] }
     const sqls = runs.map(r => r.sql)
     expect(sqls.some(s => s.includes('INSERT OR IGNORE INTO files'))).toBe(true)
-    expect(sqls.some(s => s.includes('INSERT OR IGNORE INTO audit_sessions'))).toBe(true)
+    expect(sqls.some(s => s.includes('UPDATE audit_sessions SET'))).toBe(true)
   })
 
   it('persists repo_url, branch, and commit_sha in audit_sessions', async () => {
@@ -189,14 +189,11 @@ describe('ingestion worker', () => {
     expect(response.status).toBe(200)
 
     const { runs } = env.DB as unknown as { runs: { sql: string; params: unknown[] }[] }
-    const sessionRun = runs.find(r => r.sql.includes('INSERT OR IGNORE INTO audit_sessions'))
-    expect(sessionRun).toBeDefined()
-    expect(sessionRun?.params).toContain('https://github.com/example/repo')
-    expect(sessionRun?.params).toContain('develop')
-    expect(sessionRun?.params).toContain('abc123def')
-
     const updateRun = runs.find(r => r.sql.includes('UPDATE audit_sessions SET') && r.sql.includes('repo_url'))
     expect(updateRun).toBeDefined()
+    expect(updateRun?.params).toContain('https://github.com/example/repo')
+    expect(updateRun?.params).toContain('develop')
+    expect(updateRun?.params).toContain('abc123def')
   })
   it('returns 400 for an empty files array', async () => {
     const env = makeEnv()

@@ -208,15 +208,8 @@ async function ensureAuditSession(
   branch?: string,
   commitSha?: string
 ): Promise<void> {
-  await db
-    .prepare(`
-      INSERT OR IGNORE INTO audit_sessions (
-        id, tenant_id, status, total_files, repo_url, repo_branch, last_commit_sha, created_at
-      ) VALUES (?, ?, 'pending', ?, ?, ?, ?, unixepoch())
-    `)
-    .bind(auditRunId, tenantId, totalFiles, repoUrl ?? '', branch ?? 'main', commitSha ?? null)
-    .run()
-
+  // The audit_sessions row is created at /audit/start before ingestion is invoked.
+  // Ingestion only updates totals and metadata here.
   await db
     .prepare('UPDATE audit_sessions SET total_files = ?, repo_url = ?, repo_branch = ?, last_commit_sha = ? WHERE id = ?')
     .bind(totalFiles, repoUrl ?? '', branch ?? 'main', commitSha ?? null, auditRunId)
@@ -229,15 +222,7 @@ async function markSessionFailed(
   db: D1Database,
   reason: string
 ): Promise<void> {
-  await db
-    .prepare(`
-      INSERT OR IGNORE INTO audit_sessions (
-        id, tenant_id, status, total_files, repo_url, repo_branch, last_commit_sha, created_at
-      ) VALUES (?, ?, 'failed', 0, '', 'main', NULL, unixepoch())
-    `)
-    .bind(auditRunId, tenantId)
-    .run()
-
+  // /audit/start already created the audit_sessions row; ingestion only marks it failed.
   await db
     .prepare('UPDATE audit_sessions SET status = \'failed\' WHERE id = ? AND tenant_id = ?')
     .bind(auditRunId, tenantId)
