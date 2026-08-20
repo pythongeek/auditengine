@@ -430,7 +430,7 @@ Tool: Kimi Code
 | Audit start form auth header | ✅ | /audit/new now sends tenant JWT from localStorage to /audit/start |
 | /audit/start repo_url validation | ✅ | Allows repo_url without files array |
 | GitHub User-Agent header | ✅ | Added to all GitHub API calls to satisfy API requirement |
-| wrangler deploy successful | ✅ | Deploy URL: https://auditengine.tsnion.workers.dev (Version ID: 1f57b13f-4644-45a6-a3cf-849b29573e2b) |
+| wrangler deploy successful | ✅ | Deploy URL: https://auditengine.tsnion.workers.dev (Version ID: d11f4a10-704c-4ded-ae9e-2a5e9a2db4a5) |
 
 ## TESTS
 
@@ -657,7 +657,7 @@ Type check: PASS. Tests: 263/263 PASS.
 | src/lib/router.ts | ✅ DONE | `handleAuditStart` now pre-creates the `audit_sessions` row in `pending` before dispatching the workflow. `github_token_override` is accepted in the request body and forwarded to the workflow/file-only pipeline. `handleRepoFileList` also accepts the override. |
 | src/workflows/audit-start-workflow.ts | ✅ DONE | `AuditStartPayload` includes `github_token_override`; `markAuditFailed` now writes the failure reason to `agent_errors` as well as `audit_logs`. |
 | src/lib/git-router.ts | ✅ DONE | `listRepoFiles` and `getRepoFiles` accept an optional `tokenOverride`; GitHub, GitLab, and Bitbucket paths use it when provided. |
-| src/workers/ingestion.ts | ✅ DONE | Parses `github_token_override` from JSON/multipart ingest bodies and passes it to `getRepoFiles`. |
+| src/workers/ingestion.ts | ✅ DONE | Parses `github_token_override` from JSON/multipart ingest bodies and passes it to `getRepoFiles`; `ensureAuditSession`/`markSessionFailed` now only UPDATE the row created at `/audit/start` (no longer insert inside ingestion). |
 | src/dashboard/audit-new-html.ts | ✅ DONE | Added optional GitHub PAT input, a rate-limit/token warning banner, and passes the override token when loading file lists and starting audits. |
 | scripts/security-audit.ts | ✅ DONE | Whitelisted `/api/v1/auth/login` and kept `/api/v1/auth/logout` routed through `handleProtectedRoute`. |
 | test/audit-start.test.ts | ✅ DONE | New tests asserting `audit_sessions` pre-creation and `github_token_override` propagation. |
