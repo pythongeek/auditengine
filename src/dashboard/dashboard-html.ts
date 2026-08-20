@@ -123,7 +123,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       padding: 0.4rem;
       font-size: 0.8rem;
       margin-bottom: 0.4rem;
+      cursor: pointer;
     }
+    .task:hover { border-color: var(--accent); }
     .task .conflict {
       display: inline-block;
       background: var(--critical);
@@ -133,6 +135,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       border-radius: 3px;
       margin-left: 0.3rem;
     }
+    .task .lock { color: var(--yellow); font-size: 0.7rem; }
     .budget-bar {
       height: 1.25rem;
       background: var(--bg);
@@ -183,6 +186,14 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       border-radius: 8px;
       text-align: center;
     }
+    #errorBanner, #progressBanner {
+      display: none;
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    #errorBanner { background: rgba(239,68,68,0.1); color: var(--red); border-color: var(--red); }
+    #progressBanner { color: var(--muted); }
+    #progressBanner .status { font-weight: 600; color: var(--text); }
   </style>
 </head>
 <body>
@@ -195,6 +206,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       <a href="/audit/new">New Audit</a>
       <a href="/dashboard">Dashboard</a>
       <a href="/settings">Settings</a>
+      <a href="#" id="logout">Logout</a>
     </div>
   </nav>
 
@@ -206,6 +218,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   <div id="noAuditWarning" style="display:none; padding: 1rem 1.5rem; color: var(--muted); border-bottom: 1px solid var(--border);">
     No <code>audit_run_id</code> in the URL. <a href="/audit/new" style="color: var(--accent);">Start a new audit</a> or pick one from <a href="/audits" style="color: var(--accent);">Audits</a>.
   </div>
+
+  <div id="errorBanner"></div>
+  <div id="progressBanner"></div>
 
   <main>
     <section>
@@ -264,9 +279,11 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     });
 
     const token = localStorage.getItem('auditengine_token');
+    const tenantId = localStorage.getItem('auditengine_tenant');
     const params = new URLSearchParams(location.search);
     const auditRunId = params.get('audit_run_id') || 'default';
     if (!token) location.href = '/login';
+    if (!tenantId) location.href = '/login';
     if (auditRunId === 'default') {
       document.getElementById('noAuditWarning').style.display = 'block';
     }
@@ -283,6 +300,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       overlay: document.getElementById('budgetOverlay'),
       overlaySpent: document.getElementById('overlaySpent'),
       overlayBudget: document.getElementById('overlayBudget'),
+      errorBanner: document.getElementById('errorBanner'),
+      progressBanner: document.getElementById('progressBanner'),
     };
 
     els.auditMeta.textContent = 'Audit: ' + auditRunId;
@@ -294,12 +313,12 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       }).join('');
     }
 
-    function addFinding(event) {
-      const payload = event.payload || {};
+    function addFinding(eventLike) {
+      const payload = eventLike.payload || eventLike;
       const severity = payload.severity || 'info';
       const div = document.createElement('div');
       div.className = \`finding \${severity}\`;
-      div.innerHTML = \`<div><strong>\${payload.category || 'finding'}</strong> · \${payload.file || ''}</div><div>\${payload.description || ''}</div><div class="meta">\${payload.agent_type || ''} · \${new Date(event.ts).toLocaleTimeString()}</div>\`;
+      div.innerHTML = \`<div><strong>\${payload.category || 'finding'}</strong> · \${payload.file || ''}</div><div>\${payload.description || ''}</div><div class="meta">\${payload.agent_type || ''} · \${new Date((eventLike.ts || payload.ts || Date.now())).toLocaleTimeString()}</div>\`;
       els.findings.prepend(div);
       if (els.findings.children.length > 50) els.findings.lastElementChild.remove();
       const type = payload.agent_type;
@@ -313,7 +332,16 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         if (!col) return;
         const div = document.createElement('div');
         div.className = 'task';
-        div.innerHTML = \`<div>#\${task.id.slice(-6)} · score \${task.priority_score}</div><div>findings: \${task.finding_count}\${task.conflict_flag ? '<span class="conflict">CONFLICT</span>' : ''}</div>\`;
+        const lockText = task.lock_expires_at && task.status === 'in_progress'
+          ? \`<div class="lock">locked until \${new Date(task.lock_expires_at * 1000).toLocaleString()}</div>\`
+          : '';
+        div.innerHTML = \`<div>\${task.title || '#' + task.id.slice(-6)} · score \${task.priority_score}</div><div>findings: \${task.finding_count}\${task.conflict_flag ? '<span class="conflict">CONFLICT</span>' : ''}</div>\${lockText}\`;
+        div.addEventListener('click', () => {
+          const u = new URL('/task/' + task.id, location.origin);
+          u.searchParams.set('tenant_id', tenantId);
+          u.searchParams.set('audit_run_id', auditRunId);
+          location.href = u.toString();
+        });
         col.appendChild(div);
       });
     }
@@ -329,6 +357,103 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       els.tokenTable.innerHTML = Object.entries(tokenUsage).map(([model, data]) => {
         return \`<tr><td>\${model}</td><td>\${data.calls}</td><td>\${data.tokens}</td><td>\$\${data.cost.toFixed(4)}</td></tr>\`;
       }).join('');
+    }
+
+    function showError(message) {
+      els.errorBanner.textContent = message;
+      els.errorBanner.style.display = 'block';
+      els.progressBanner.style.display = 'none';
+    }
+
+    function showProgress(audit) {
+      if (audit.status === 'failed') return showError(els.errorBanner.textContent || 'Audit failed');
+      els.errorBanner.style.display = 'none';
+      const repo = audit.repo_url ? audit.repo_url.replace(/^https?:\\/\\//, '') : 'repo';
+      let html = \`<span class="status">\${audit.status.toUpperCase()}</span> · \${repo}\`;
+      if (audit.status === 'pending' || audit.status === 'running') {
+        html += \` · \${audit.files_analyzed || 0} / \${audit.total_files || 0} files analyzed · \${audit.findings_count || 0} findings\`;
+      }
+      if (audit.readiness_score) {
+        html += \` · readiness \${(audit.readiness_score * 100).toFixed(0)}%\`;
+      }
+      els.progressBanner.innerHTML = html;
+      els.progressBanner.style.display = 'block';
+    }
+
+    async function loadState() {
+      if (!tenantId || auditRunId === 'default') return;
+      try {
+        const res = await fetch(\`/api/v1/tenants/\${tenantId}/audits/\${auditRunId}/state\`, {
+          headers: { Authorization: 'Bearer ' + token }
+        });
+        if (!res.ok) {
+          showError('Failed to load audit state: HTTP ' + res.status);
+          return;
+        }
+        const data = await res.json();
+        const audit = data.audit || {};
+
+        // Persist active session context for navigation.
+        localStorage.setItem('auditengine_audit_run_id', auditRunId);
+
+        // Agent registry
+        AGENT_TYPES.forEach(type => { agents[type] = { state: 'idle', files: 0, findings: 0 }; });
+        (data.agents || []).forEach(row => {
+          if (row.agent_type && agents[row.agent_type]) {
+            agents[row.agent_type] = { state: row.status || 'idle', files: row.queue_cursor || 0, findings: 0 };
+          }
+        });
+
+        // Findings feed
+        els.findings.innerHTML = '';
+        const findingCounts = {};
+        (data.findings || []).slice().reverse().forEach(f => {
+          addFinding({ payload: f, ts: f.ts || Date.now() });
+          findingCounts[f.agent_type] = (findingCounts[f.agent_type] || 0) + 1;
+        });
+        Object.keys(findingCounts).forEach(type => {
+          if (agents[type]) agents[type].findings = findingCounts[type];
+        });
+
+        // Tasks
+        Object.keys(tasks).forEach(k => delete tasks[k]);
+        (data.tasks || []).forEach(t => {
+          let findingCount = 0;
+          try { findingCount = JSON.parse(t.finding_ids || '[]').length; } catch { findingCount = 0; }
+          tasks[t.task_id] = {
+            id: t.task_id,
+            title: t.title,
+            status: t.status,
+            priority_score: t.priority_score || 0,
+            finding_count: findingCount,
+            conflict_flag: !!t.conflict_flag,
+            lock_expires_at: t.lock_expires_at,
+            assigned_agent: t.assigned_agent,
+          };
+        });
+
+        // Token usage / budget
+        Object.keys(tokenUsage).forEach(k => delete tokenUsage[k]);
+        (data.token_usage || []).forEach(row => {
+          tokenUsage[row.model] = { calls: row.calls || 0, tokens: row.tokens || 0, cost: row.cost || 0 };
+        });
+        const budget = data.budget || { budget_usd: 0, spent_usd: 0 };
+        budgetTotal = budget.budget_usd || 0;
+        budgetSpent = budget.spent_usd || 0;
+
+        if (data.error_banner) {
+          showError(data.error_banner);
+        } else {
+          showProgress(audit);
+        }
+
+        renderAgents();
+        renderTasks();
+        renderBudget();
+        renderTokenUsage();
+      } catch (err) {
+        showError('Failed to load audit state: ' + (err.message || 'unknown error'));
+      }
     }
 
     function handleEvent(event) {
@@ -372,11 +497,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
           break;
         }
         case 'task_created': {
+          const findingIds = payload.finding_ids || [];
           tasks[payload.task_id] = {
             id: payload.task_id,
+            title: payload.title,
             status: 'backlog',
             priority_score: payload.priority_score || 0,
-            finding_count: (payload.finding_ids || []).length,
+            finding_count: Array.isArray(findingIds) ? findingIds.length : 0,
             conflict_flag: payload.conflict_flag || false,
           };
           renderTasks();
@@ -415,6 +542,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         case 'audit_complete': {
           els.connection.textContent = 'Audit complete';
           els.connection.classList.add('connected');
+          loadState();
           break;
         }
       }
@@ -447,9 +575,30 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       ws.onerror = () => ws.close();
     }
 
+    function decorateNavLinks() {
+      const auditRunId = localStorage.getItem('auditengine_audit_run_id');
+      document.querySelectorAll('nav a').forEach(a => {
+        const href = a.getAttribute('href');
+        if (!href || href === '#' || href.startsWith('http')) return;
+        const u = new URL(href, location.origin);
+        if (auditRunId) u.searchParams.set('audit_run_id', auditRunId);
+        a.href = u.pathname + u.search;
+      });
+    }
+
+    document.getElementById('logout').addEventListener('click', (e) => {
+      e.preventDefault();
+      localStorage.removeItem('auditengine_token');
+      localStorage.removeItem('auditengine_tenant');
+      localStorage.removeItem('auditengine_audit_run_id');
+      location.href = '/login';
+    });
+
     renderAgents();
-    connect();
+    loadState().then(() => {
+      decorateNavLinks();
+      connect();
+    });
   </script>
 </body>
-</html>
-`
+</html>`

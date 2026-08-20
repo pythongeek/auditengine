@@ -47,6 +47,10 @@ import {
   handleTaskVerify,
   handleTaskPlanPost,
   handleTaskFixPost,
+  handleTaskDetailGet,
+  handleTaskFixPreview,
+  handleTaskRelease,
+  handleDashboardStateGet,
   handleFindingList,
   handleFindingPatch,
   handleGitHubWebhook,
@@ -63,15 +67,19 @@ import {
   handleTenantList,
   handleTenantCreate,
   handleTenantGet,
+  handleRegister,
+  handleLogin,
+  handleLogout,
   handleGitBranch,
   handleGitCommit,
   handleGitPullRequest,
   handleAuditList,
   handleAuditDetail,
-  handleLogin,
+  handleLoginPage,
   handleTenantSelector,
   handleAuditListPage,
   handleTaskBoard,
+  handleTaskDetailPage,
   handleFindingDetail,
   handleOnboarding,
   handleSettings,
@@ -79,6 +87,10 @@ import {
   handleSettingsKeysPost,
   handleOpenApiGet,
   handleRepoFileList,
+  handleRepoList,
+  handleRepoCreate,
+  handleRepoPatch,
+  handleRepoDelete,
   errorResponse,
 } from './lib/router'
 
@@ -181,6 +193,16 @@ async function dispatchRoute(request: Request, env: Env, tenantId: string, ctx?:
     return handleDashboardWS(request, env, tenantId, auditRunId)
   }
 
+  if (url.pathname === '/api/v1/auth/logout' && request.method === 'POST') {
+    return handleLogout(env, request)
+  }
+
+  const dashboardStateMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/state$/)
+  if (dashboardStateMatch && request.method === 'GET') {
+    if (tenantId !== dashboardStateMatch[1]) return errorResponse('Cannot access another tenant audit', 403, 'FORBIDDEN')
+    return handleDashboardStateGet(env, tenantId, dashboardStateMatch[2])
+  }
+
   if (url.pathname === '/api/v1/tenants' && request.method === 'GET') {
     return handleTenantList(env)
   }
@@ -245,6 +267,38 @@ async function dispatchRoute(request: Request, env: Env, tenantId: string, ctx?:
       return errorResponse('Cannot access another tenant audit', 403, 'FORBIDDEN')
     }
     return handleAuditDetail(env, tenantId, auditDetailMatch[2])
+  }
+
+  const reposMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/repositories$/)
+  if (reposMatch && request.method === 'GET') {
+    if (tenantId !== reposMatch[1]) return errorResponse('Cannot access another tenant repositories', 403, 'FORBIDDEN')
+    return handleRepoList(env, tenantId)
+  }
+  if (reposMatch && request.method === 'POST') {
+    if (tenantId !== reposMatch[1]) return errorResponse('Cannot access another tenant repositories', 403, 'FORBIDDEN')
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch {
+      return errorResponse('Invalid JSON', 400)
+    }
+    return handleRepoCreate(env, tenantId, body)
+  }
+
+  const repoDetailMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/repositories\/([^/]+)$/)
+  if (repoDetailMatch && request.method === 'PATCH') {
+    if (tenantId !== repoDetailMatch[1]) return errorResponse('Cannot access another tenant repositories', 403, 'FORBIDDEN')
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch {
+      return errorResponse('Invalid JSON', 400)
+    }
+    return handleRepoPatch(env, tenantId, repoDetailMatch[2], body)
+  }
+  if (repoDetailMatch && request.method === 'DELETE') {
+    if (tenantId !== repoDetailMatch[1]) return errorResponse('Cannot access another tenant repositories', 403, 'FORBIDDEN')
+    return handleRepoDelete(env, tenantId, repoDetailMatch[2])
   }
 
   const configMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/config$/)
@@ -329,10 +383,40 @@ async function dispatchRoute(request: Request, env: Env, tenantId: string, ctx?:
     return handleTaskPlanPost(env, tenantId, taskPlanMatch[2], taskPlanMatch[3])
   }
 
+  const taskGetMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)$/)
+  if (taskGetMatch && request.method === 'GET') {
+    if (tenantId !== taskGetMatch[1]) return errorResponse('Cannot access another tenant audit', 403, 'FORBIDDEN')
+    return handleTaskDetailGet(env, tenantId, taskGetMatch[2], taskGetMatch[3])
+  }
+
   const taskFixMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)\/fix$/)
   if (taskFixMatch && request.method === 'POST') {
     if (tenantId !== taskFixMatch[1]) return errorResponse('Cannot access another tenant audit', 403, 'FORBIDDEN')
-    return handleTaskFixPost(env, tenantId, taskFixMatch[2], taskFixMatch[3])
+    let body: unknown = {}
+    try {
+      body = await request.json()
+    } catch {
+      body = {}
+    }
+    return handleTaskFixPost(env, tenantId, taskFixMatch[2], taskFixMatch[3], body)
+  }
+
+  const taskFixPreviewMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)\/fix-preview$/)
+  if (taskFixPreviewMatch && request.method === 'POST') {
+    if (tenantId !== taskFixPreviewMatch[1]) return errorResponse('Cannot access another tenant audit', 403, 'FORBIDDEN')
+    let body: unknown = {}
+    try {
+      body = await request.json()
+    } catch {
+      body = {}
+    }
+    return handleTaskFixPreview(env, tenantId, taskFixPreviewMatch[2], taskFixPreviewMatch[3], body)
+  }
+
+  const taskReleaseMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)\/release$/)
+  if (taskReleaseMatch && request.method === 'POST') {
+    if (tenantId !== taskReleaseMatch[1]) return errorResponse('Cannot access another tenant audit', 403, 'FORBIDDEN')
+    return handleTaskRelease(env, tenantId, taskReleaseMatch[2], taskReleaseMatch[3])
   }
 
   const findingsMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/findings$/)
@@ -452,7 +536,7 @@ export default {
       return handleRepos()
     }
     if (url.pathname === '/login' && request.method === 'GET') {
-      return handleLogin()
+      return handleLoginPage()
     }
     if (url.pathname === '/tenants' && request.method === 'GET') {
       return handleTenantSelector()
@@ -462,6 +546,9 @@ export default {
     }
     if (url.pathname === '/task-board' && request.method === 'GET') {
       return handleTaskBoard()
+    }
+    if (url.pathname === '/task' && request.method === 'GET') {
+      return handleTaskDetailPage()
     }
     if (url.pathname === '/finding' && request.method === 'GET') {
       return handleFindingDetail()
@@ -495,6 +582,15 @@ export default {
     }
     if (url.pathname === '/api/v1/openapi.json' && request.method === 'GET') {
       return handleOpenApiGet()
+    }
+    if (url.pathname === '/api/v1/auth/login' && request.method === 'POST') {
+      let body: unknown
+      try {
+        body = await request.json()
+      } catch {
+        return errorResponse('Invalid JSON', 400)
+      }
+      return handleLogin(env, body)
     }
     if (url.pathname === '/webhooks/github' && request.method === 'POST') {
       return handleGitHubWebhook(request, env)
@@ -553,6 +649,20 @@ export default {
       return handleSettingsKeysPost(env, request, body)
     }
 
+    if (url.pathname === '/api/v1/auth/register' && request.method === 'POST') {
+      const admin = await isAdmin(request, env)
+      if (!admin) {
+        return unauthorizedResponse('Admin credentials required')
+      }
+      let body: unknown
+      try {
+        body = await request.json()
+      } catch {
+        return errorResponse('Invalid JSON', 400)
+      }
+      return handleRegister(env, body)
+    }
+
     const auditsMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits$/)
     if (auditsMatch && request.method === 'GET') {
       return handleProtectedRoute(request, env, auditsMatch[1])
@@ -561,6 +671,11 @@ export default {
     const auditDetailMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)$/)
     if (auditDetailMatch && request.method === 'GET') {
       return handleProtectedRoute(request, env, auditDetailMatch[1])
+    }
+
+    const dashboardStateMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/state$/)
+    if (dashboardStateMatch && request.method === 'GET') {
+      return handleProtectedRoute(request, env, dashboardStateMatch[1])
     }
 
     // Protected routes
@@ -590,6 +705,10 @@ export default {
     }
 
     if (url.pathname === '/api/v1/repo/files' && request.method === 'POST') {
+      return handleProtectedRoute(request, env, null)
+    }
+
+    if (url.pathname === '/api/v1/auth/logout' && request.method === 'POST') {
       return handleProtectedRoute(request, env, null)
     }
 
@@ -633,6 +752,21 @@ export default {
       return handleProtectedRoute(request, env, taskPlanMatch[1])
     }
 
+    const taskDetailMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)$/)
+    if (taskDetailMatch && request.method === 'GET') {
+      return handleProtectedRoute(request, env, taskDetailMatch[1])
+    }
+
+    const taskFixPreviewMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)\/fix-preview$/)
+    if (taskFixPreviewMatch && request.method === 'POST') {
+      return handleProtectedRoute(request, env, taskFixPreviewMatch[1])
+    }
+
+    const taskReleaseMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/tasks\/([^/]+)\/release$/)
+    if (taskReleaseMatch && request.method === 'POST') {
+      return handleProtectedRoute(request, env, taskReleaseMatch[1])
+    }
+
     const findingsMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/findings$/)
     if (findingsMatch && request.method === 'GET') {
       return handleProtectedRoute(request, env, findingsMatch[1])
@@ -641,6 +775,16 @@ export default {
     const findingPatchMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/audits\/([^/]+)\/findings\/([^/]+)$/)
     if (findingPatchMatch && request.method === 'PATCH') {
       return handleProtectedRoute(request, env, findingPatchMatch[1])
+    }
+
+    const reposMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/repositories$/)
+    if (reposMatch && (request.method === 'GET' || request.method === 'POST')) {
+      return handleProtectedRoute(request, env, reposMatch[1])
+    }
+
+    const repoDetailMatch = url.pathname.match(/^\/api\/v1\/tenants\/([^/]+)\/repositories\/([^/]+)$/)
+    if (repoDetailMatch && (request.method === 'PATCH' || request.method === 'DELETE')) {
+      return handleProtectedRoute(request, env, repoDetailMatch[1])
     }
 
     return new Response('AuditEngine v1.0', { status: 200 })

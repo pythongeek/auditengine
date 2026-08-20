@@ -143,6 +143,12 @@ export async function getApiKey(provider: Provider, env: Env, db: D1Database): P
   return getProviderApiKey(db, provider, env.ENCRYPTION_KEY, envValue)
 }
 
+export async function hasAnyProviderKey(env: Env, db: D1Database): Promise<boolean> {
+  if (await getApiKey('kimi', env, db)) return true
+  if (await getApiKey('minimax', env, db)) return true
+  return false
+}
+
 export async function llmCall(params: LLMCallParams, env: Env): Promise<NormalizedResponse> {
   const { agentId, agentType, taskType, messages, auditRunId, db, broadcast } = params
 
@@ -196,11 +202,27 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
     )
   }
 
-  const apiKey = await getApiKey(finalRoute.provider, env, db)
+  let activeRoute = finalRoute
+  let apiKey = await getApiKey(activeRoute.provider, env, db)
+
+  // Fallback to the other provider when the routed provider has no key configured.
+  // This keeps audits alive if only one provider key is supplied.
   if (!apiKey) {
-    throw new Error(`No API key configured for provider ${finalRoute.provider}`)
+    const fallbackProvider = activeRoute.provider === 'kimi' ? 'minimax' : 'kimi'
+    const fallbackKey = await getApiKey(fallbackProvider, env, db)
+    if (fallbackKey) {
+      apiKey = fallbackKey
+      activeRoute = {
+        ...activeRoute,
+        provider: fallbackProvider,
+        model: fallbackProvider === 'kimi' ? 'kimi-k2.6' : 'minimax-m3',
+      }
+    } else {
+      throw new Error(`No API key configured for provider ${activeRoute.provider} (tried ${fallbackProvider} too)`)
+    }
   }
-  const endpoint = buildEndpoint(finalRoute.model, env)
+
+  const endpoint = buildEndpoint(activeRoute.model, env)
 
   const temperature = agentConfig.temperature
   const topP = agentConfig.top_p
@@ -211,11 +233,11 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
   }))
 
   let body: Record<string, unknown>
-  if (finalRoute.provider === 'kimi') {
+  if (activeRoute.provider === 'kimi') {
     body = {
-      model: finalRoute.model,
+      model: activeRoute.model,
       messages: redactedMessages,
-      max_tokens: finalRoute.maxTokens,
+      max_tokens: activeRoute.maxTokens,
       temperature,
       top_p: topP,
     }
@@ -225,9 +247,9 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
       m.role === 'assistant' ? { role: m.role, text: m.content } : { role: m.role, text: m.content }
     )
     body = {
-      model: finalRoute.model,
+      model: activeRoute.model,
       messages: minimaxMessages,
-      tokens_to_generate: finalRoute.maxTokens,
+      tokens_to_generate: activeRoute.maxTokens,
       temperature,
       top_p: topP,
     }
@@ -248,9 +270,9 @@ export async function llmCall(params: LLMCallParams, env: Env): Promise<Normaliz
   }
 
   const raw = await res.json()
-  const normalized = normalizeResponse(finalRoute.provider, raw)
+  const normalized = normalizeResponse(activeRoute.provider, raw)
 
-  const costUsd = calcCostUsd(finalRoute.model, normalized.usage)
+  const costUsd = calcCostUsd(activeRoute.model, normalized.usage)
 
   await db
     .prepare(`

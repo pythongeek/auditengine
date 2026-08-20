@@ -337,6 +337,17 @@ export const SETTINGS_HTML = `<!DOCTYPE html>
         tenantMessage.textContent = err.message;
       }
     });
+
+    (function decorateNavLinks() {
+      const auditRunId = localStorage.getItem('auditengine_audit_run_id');
+      document.querySelectorAll('nav a').forEach(a => {
+        const href = a.getAttribute('href');
+        if (!href || href === '#' || href.startsWith('http')) return;
+        const u = new URL(href, location.origin);
+        if (auditRunId) u.searchParams.set('audit_run_id', auditRunId);
+        a.href = u.pathname + u.search;
+      });
+    })();
   </script>
 </body>
 </html>

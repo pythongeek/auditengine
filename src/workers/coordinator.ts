@@ -4,6 +4,7 @@ import { DOMAIN_MAP, AgentDurableObject } from '../agents/base-agent'
 import { verifyTask, recalcProductionScore } from './verification'
 import { runVisualQA } from './visual-qa'
 import { ensureDefaultAgentConfig, ALL_AGENT_TYPES, NON_CRITICAL_AGENT_TYPES } from '../lib/agent-config'
+import { hasAnyProviderKey } from '../lib/llm-gateway'
 
 export class CoordinatorDurableObject extends DurableObject<Env> {
   private auditRunId: string = ''
@@ -23,8 +24,16 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
     this.auditRunId = body.audit_run_id
     this.tenantId = body.tenant_id ?? ''
 
+    if (this.ctx.storage?.put) {
+      await this.ctx.storage.put('auditRunId', this.auditRunId)
+      await this.ctx.storage.put('tenantId', this.tenantId)
+    }
+
     await this.ensureAuditSession()
-    await this.ctx.storage.setAlarm(Date.now() + 30_000)
+    await this.step()
+    if (this.ctx.storage?.setAlarm) {
+      await this.ctx.storage.setAlarm(Date.now() + 15_000)
+    }
     return new Response('Coordinator started', { status: 200 })
   }
 
@@ -48,11 +57,64 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
     }
   }
 
+  private async failAudit(reason: string): Promise<void> {
+    const db = this.env.DB
+    await db
+      .prepare(`
+        INSERT OR IGNORE INTO audit_sessions (
+          id, tenant_id, status, total_files, repo_url, repo_branch, last_commit_sha, created_at
+        ) VALUES (?, ?, 'failed', 0, '', 'main', NULL, unixepoch())
+      `)
+      .bind(this.auditRunId, this.tenantId)
+      .run()
+
+    await db
+      .prepare("UPDATE audit_sessions SET status = 'failed' WHERE id = ?")
+      .bind(this.auditRunId)
+      .run()
+
+    await db
+      .prepare(`
+        INSERT INTO audit_logs (tenant_id, audit_run_id, agent_id, event_type, event_data)
+        VALUES (?, ?, NULL, 'workflow_failed', ?)
+      `)
+      .bind(this.tenantId, this.auditRunId, JSON.stringify({ phase: 'coordinator', reason }))
+      .run()
+
+    this.broadcast({
+      type: 'audit_complete',
+      audit_run_id: this.auditRunId,
+      payload: { status: 'failed', reason },
+      ts: Date.now(),
+    })
+  }
+
   async alarm(): Promise<void> {
+    await this.step()
+  }
+
+  async step(): Promise<void> {
+    if (!this.auditRunId && this.ctx.storage?.get) {
+      this.auditRunId = (await this.ctx.storage.get<string>('auditRunId')) ?? ''
+    }
+    if (!this.tenantId && this.ctx.storage?.get) {
+      this.tenantId = (await this.ctx.storage.get<string>('tenantId')) ?? ''
+    }
     if (!this.auditRunId) return
 
     const env = this.env as Env
     const db = env.DB
+
+    const session = await db
+      .prepare('SELECT status FROM audit_sessions WHERE id = ?')
+      .bind(this.auditRunId)
+      .first<{ status: string }>()
+    if (session?.status === 'failed') return
+
+    if (!(await hasAnyProviderKey(env, db))) {
+      await this.failAudit('No LLM provider API key configured. Set KIMI_API_KEY or MINIMAX_API_KEY in Settings or Cloudflare secrets.')
+      return
+    }
 
     const budgetRow = await db
       .prepare('SELECT * FROM run_budget WHERE audit_run_id = ?')
@@ -223,17 +285,38 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
 
     // Transition 4: phase-3 → phase-4
     else if (currentPhase === 'phase-3') {
-      const tasks = await db
-        .prepare('SELECT 1 FROM tasks WHERE audit_run_id = ? LIMIT 1')
+      // Wait for the priority resolver (which runs as a workflow at the end of
+      // phase 2) and all phase-3 agents to finish. The pipeline must not get
+      // stuck when agents produce zero findings, because that produces zero
+      // tasks; the audit should still complete.
+      const priorityResolverDone = await db
+        .prepare("SELECT 1 FROM agent_registry WHERE audit_run_id = ? AND agent_type = 'priority_resolver' AND status = 'done' LIMIT 1")
         .bind(this.auditRunId)
         .first()
-      if (tasks) {
-        this.broadcast({
-          type: 'task_created',
-          audit_run_id: this.auditRunId,
-          payload: { message: 'Tasks ready' },
-          ts: Date.now(),
-        })
+      const allDone = await allAgentsDoneInPhase(this.auditRunId, 3, db)
+
+      if (priorityResolverDone && allDone) {
+        const taskCount = await db
+          .prepare('SELECT COUNT(*) as count FROM tasks WHERE audit_run_id = ?')
+          .bind(this.auditRunId)
+          .first<{ count: number }>()
+
+        if (taskCount && taskCount.count > 0) {
+          this.broadcast({
+            type: 'task_created',
+            audit_run_id: this.auditRunId,
+            payload: { message: 'Tasks ready' },
+            ts: Date.now(),
+          })
+        } else {
+          this.broadcast({
+            type: 'task_created',
+            audit_run_id: this.auditRunId,
+            payload: { message: 'No findings; no tasks generated' },
+            ts: Date.now(),
+          })
+        }
+
         await db
           .prepare("UPDATE run_budget SET phase = 'phase-4' WHERE audit_run_id = ?")
           .bind(this.auditRunId)
@@ -297,7 +380,9 @@ export class CoordinatorDurableObject extends DurableObject<Env> {
       }
     }
 
-    await this.ctx.storage.setAlarm(Date.now() + 30_000)
+    if (currentPhase !== 'complete' && this.ctx.storage?.setAlarm) {
+      await this.ctx.storage.setAlarm(Date.now() + 15_000)
+    }
   }
 
   private broadcast(event: DashboardEvent): void {
@@ -417,6 +502,22 @@ export async function spawnAgent(
     `)
     .bind(agentId, tenantId, agentType, auditRunId, 'idle', phase, domain, JSON.stringify(assignedFiles))
     .run()
+
+  if (env.DASHBOARD_DO && typeof env.DASHBOARD_DO.idFromName === 'function') {
+    const dashId = env.DASHBOARD_DO.idFromName('dashboard-' + auditRunId)
+    const dashStub = env.DASHBOARD_DO.get(dashId)
+    dashStub.fetch(new Request('https://dashboard/broadcast', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'agent_spawned',
+        audit_run_id: auditRunId,
+        agent_id: agentId,
+        payload: { agent_type: agentType, agent_id: agentId, phase },
+        ts: Date.now(),
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    })).catch(() => {})
+  }
 
   const ns = agentNamespace(agentType, env)
   const id = ns.idFromName(agentId)

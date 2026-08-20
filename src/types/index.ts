@@ -287,9 +287,45 @@ export interface Tenant {
   updated_at:  string
 }
 
+export interface Repository {
+  id:              string
+  tenant_id:       string
+  provider:        string
+  owner:           string | null
+  repo:            string | null
+  url:             string
+  default_branch:  string
+  is_active:       number
+  created_at:      number
+  updated_at:      number
+}
+
 export interface AuthContext {
   tenantId: string
   plan:     string
+  userId?:  string
+  role?:    string
+}
+
+// ── Users ───────────────────────────────────────────────────────────────────
+export interface User {
+  id:            string
+  tenant_id:     string
+  email:         string
+  password_hash: string
+  role:          'admin' | 'member'
+  created_at:    number
+  updated_at:    number
+}
+
+export interface UserSession {
+  id:          string
+  user_id:     string
+  tenant_id:   string
+  token_hash:  string
+  expires_at:  number
+  revoked_at:  number | null
+  created_at:  number
 }
 
 // ── Audit Session / File Manifest / Audit Log ─────────────────────────────

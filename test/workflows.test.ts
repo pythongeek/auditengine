@@ -2,9 +2,20 @@ import { describe, it, expect, vi } from 'vitest'
 import { PriorityResolverWorkflow } from '../src/workflows/priority-resolver-workflow'
 import { SalvationWorkflow } from '../src/workflows/salvation-workflow'
 import { ContinuousAuditWorkflow } from '../src/workflows/continuous-audit-workflow'
+import { AuditStartWorkflow } from '../src/workflows/audit-start-workflow'
 import { makeMockWorkflows, makeMockEnvStrings } from './helpers'
 import type { Env, AgentPersistentState } from '../src/types/index'
-import type { WorkflowStep, WorkflowStepContext } from 'cloudflare:workers'
+import type { WorkflowEvent, WorkflowStep, WorkflowStepContext } from 'cloudflare:workers'
+
+vi.mock('../src/workers/ingestion', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/workers/ingestion')>()
+  return {
+    ...actual,
+    default: {
+      fetch: vi.fn(),
+    },
+  }
+})
 
 if (typeof crypto === 'undefined') {
   const { webcrypto } = await import('node:crypto')
@@ -43,6 +54,7 @@ vi.mock('../src/lib/git-diff', () => ({
 }))
 
 import { getLatestCommit, getChangedFilesSince, fetchRawFile } from '../src/lib/git-diff'
+import ingestionWorker from '../src/workers/ingestion'
 
 function makeMockD1(options: { auditSession?: { repo_url: string; repo_branch: string; last_commit_sha: string | null } } = {}): { db: D1Database; runs: { sql: string; params: unknown[] }[] } {
   const runs: { sql: string; params: unknown[] }[] = []
@@ -242,5 +254,64 @@ describe('Workflows', () => {
     ])
     expect(vi.mocked(getLatestCommit)).toHaveBeenCalledWith('acme', 'widgets', 'main', '')
     expect(vi.mocked(getChangedFilesSince)).toHaveBeenCalledWith('acme', 'widgets', 'old-sha', 'new-sha', '')
+  })
+
+  describe('AuditStartWorkflow', () => {
+    it('runs ingestion and coordinator steps on success', async () => {
+      const { db, runs } = makeMockD1()
+      const env = makeEnv({ DB: db })
+      vi.mocked(ingestionWorker.fetch).mockResolvedValueOnce(new Response(JSON.stringify({ file_count: 1, total_chunks: 1 }), { status: 200 }))
+      const workflow = new AuditStartWorkflow({} as ExecutionContext, env)
+      const { step, names } = makeStep()
+
+      await workflow.run(
+        { payload: { audit_run_id: 'run-001', tenant_id: 'tenant-1', repo_url: 'https://github.com/acme/widgets', branch: 'main' } } as unknown as Parameters<typeof workflow.run>[0],
+        step
+      )
+
+      expect(names).toEqual(['ingest-files', 'start-coordinator'])
+      expect(runs.some(r => r.sql.includes('start-coordinator'))).toBe(false)
+    })
+
+    it('marks audit session failed and writes audit_logs when ingestion fails', async () => {
+      const { db, runs } = makeMockD1()
+      const env = makeEnv({ DB: db })
+      vi.mocked(ingestionWorker.fetch).mockResolvedValueOnce(new Response(JSON.stringify({ error: 'GitHub fetch failed' }), { status: 500 }))
+      const workflow = new AuditStartWorkflow({} as ExecutionContext, env)
+      const { step } = makeStep()
+
+      await expect(workflow.run(
+        { payload: { audit_run_id: 'run-001', tenant_id: 'tenant-1', repo_url: 'https://github.com/acme/widgets' } } as unknown as Parameters<typeof workflow.run>[0],
+        step
+      )).rejects.toThrow('GitHub fetch failed')
+
+      expect(runs.some(r => r.sql.toLowerCase().includes('update audit_sessions') && r.sql.includes('failed'))).toBe(true)
+      const logRun = runs.find(r => r.sql.toLowerCase().includes('audit_logs') && r.sql.toLowerCase().includes('insert') && r.params.some(p => p === 'workflow_failed'))
+      expect(logRun).toBeDefined()
+      expect(JSON.stringify(logRun?.params)).toContain('GitHub fetch failed')
+    })
+
+    it('marks audit session failed when coordinator step fails', async () => {
+      const { db, runs } = makeMockD1()
+      const env = makeEnv({
+        DB: db,
+        COORDINATOR_DO: {
+          idFromName: () => ({ toString: () => 'coordinator-id' }),
+          get: () => ({
+            fetch: () => Promise.reject(new Error('coordinator error')),
+          }),
+        } as unknown as DurableObjectNamespace,
+      })
+      vi.mocked(ingestionWorker.fetch).mockResolvedValueOnce(new Response(JSON.stringify({ file_count: 1, total_chunks: 1 }), { status: 200 }))
+      const workflow = new AuditStartWorkflow({} as ExecutionContext, env)
+      const { step } = makeStep()
+
+      await expect(workflow.run(
+        { payload: { audit_run_id: 'run-002', tenant_id: 'tenant-1', repo_url: 'https://github.com/acme/widgets' } } as unknown as Parameters<typeof workflow.run>[0],
+        step
+      )).rejects.toThrow('coordinator error')
+
+      expect(runs.some(r => r.sql.toLowerCase().includes('update audit_sessions') && r.sql.includes('failed'))).toBe(true)
+    })
   })
 })

@@ -113,8 +113,8 @@ function makeMockDashboardNamespace(events: DashboardEvent[]) {
   } as unknown as DurableObjectNamespace
 }
 
-function makeMockEnvForAlarm(db: D1Database, events: DashboardEvent[]): Env {
-  const base = makeMockEnv({ DB: db })
+function makeMockEnvForAlarm(db: D1Database, events: DashboardEvent[], overrides: Partial<Env> = {}): Env {
+  const base = makeMockEnv({ DB: db, KIMI_API_KEY: 'test-kimi-key', ...overrides })
   base.DASHBOARD_DO = makeMockDashboardNamespace(events)
   return base
 }
@@ -342,5 +342,165 @@ describe('coordinator task lock timeout', () => {
     expect(events[0].payload.task_id).toBe('task-expired')
     expect(events[0].payload.status).toBe('backlog')
     expect(events[0].payload.reason).toBe('lock_expired')
+  })
+})
+
+describe('coordinator provider key fail-fast', () => {
+  function makeMockD1NoKeys(): { db: D1Database; runs: { sql: string; params: unknown[] }[] } {
+    const appSettings = new Map<string, string>()
+    const runs: { sql: string; params: unknown[] }[] = []
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...params: unknown[]) => ({
+          run: () => {
+            runs.push({ sql, params })
+            return Promise.resolve({ changes: 1, meta: {} })
+          },
+          first: () => {
+            runs.push({ sql, params })
+            const lower = sql.toLowerCase()
+            if (lower.includes('run_budget')) {
+              return Promise.resolve({
+                phase: 'boot',
+                alert_50_sent: 0,
+                alert_80_sent: 0,
+                alert_95_sent: 0,
+                spent_usd: 0,
+                budget_usd: 5,
+              })
+            }
+            if (lower.includes('from app_settings')) {
+              return Promise.resolve(appSettings.get(params[0] as string) ? { value: appSettings.get(params[0] as string) } : null)
+            }
+            if (lower.includes('from audit_sessions')) {
+              return Promise.resolve({ status: 'running' })
+            }
+            return Promise.resolve(null)
+          },
+          all: () => {
+            runs.push({ sql, params })
+            return Promise.resolve({ results: [] })
+          },
+        }),
+      }),
+      batch: () => Promise.resolve([]),
+      dump: () => Promise.resolve(new ArrayBuffer(0)),
+      exec: () => Promise.resolve({ count: 0, duration: 0 }),
+    } as unknown as D1Database
+    return { db, runs }
+  }
+
+  it('marks the audit failed when no LLM provider keys are configured', async () => {
+    const events: DashboardEvent[] = []
+    const { db, runs } = makeMockD1NoKeys()
+    const env = makeMockEnvForAlarm(db, events, { KIMI_API_KEY: '', MINIMAX_API_KEY: '' })
+    const coordinator = new CoordinatorDurableObject({ storage: { setAlarm: vi.fn() } } as unknown as DurableObjectState, env)
+    ;(coordinator as any).auditRunId = 'run-no-keys'
+    ;(coordinator as any).tenantId = 'tenant-1'
+
+    await coordinator.alarm()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(runs.some(r => r.sql.toLowerCase().includes('update audit_sessions') && r.sql.includes('failed'))).toBe(true)
+    const logRun = runs.find(r => r.sql.toLowerCase().includes('audit_logs') && r.sql.toLowerCase().includes('insert') && r.sql.includes('workflow_failed'))
+    expect(logRun).toBeDefined()
+    expect(JSON.stringify(logRun?.params)).toMatch(/llm provider api key/i)
+    expect(events.some(e => e.type === 'audit_complete' && e.payload.status === 'failed')).toBe(true)
+  })
+})
+
+describe('coordinator phase-3 to phase-4 transition', () => {
+  function makeMockD1Phase3(options: { tasks?: number; priorityResolverDone?: boolean; phase3AgentsDone?: boolean } = {}): { db: D1Database; runs: { sql: string; params: unknown[] }[] } {
+    const runs: { sql: string; params: unknown[] }[] = []
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...params: unknown[]) => ({
+          run: () => {
+            runs.push({ sql, params })
+            return Promise.resolve({ changes: 1, meta: {} })
+          },
+          first: () => {
+            runs.push({ sql, params })
+            const lower = sql.toLowerCase()
+            if (lower.includes('run_budget')) {
+              return Promise.resolve({
+                phase: 'phase-3',
+                alert_50_sent: 0,
+                alert_80_sent: 0,
+                alert_95_sent: 0,
+                spent_usd: 0,
+                budget_usd: 5,
+              })
+            }
+            if (lower.includes("agent_type = 'priority_resolver'")) {
+              return Promise.resolve(options.priorityResolverDone ? { status: 'done' } : null)
+            }
+            if (lower.includes('from agent_registry') && lower.includes('phase = ?') && lower.includes('count(*)')) {
+              const phase = params[1]
+              if (phase === 3) {
+                // The first query is the total count; the second filters by status IN ('done', 'error').
+                const isDoneQuery = lower.includes("status in ('done', 'error')") || lower.includes('status in (?, ?)')
+                if (isDoneQuery) {
+                  return Promise.resolve({ count: options.phase3AgentsDone ? 1 : 0 })
+                }
+                return Promise.resolve({ count: options.phase3AgentsDone ? 0 : 1 })
+              }
+              return Promise.resolve({ count: 0 })
+            }
+            if (lower.includes('from tasks') && lower.includes('count(*)')) {
+              return Promise.resolve({ count: options.tasks ?? 0 })
+            }
+            return Promise.resolve(null)
+          },
+          all: () => {
+            runs.push({ sql, params })
+            return Promise.resolve({ results: [] })
+          },
+        }),
+      }),
+      batch: () => Promise.resolve([]),
+      dump: () => Promise.resolve(new ArrayBuffer(0)),
+      exec: () => Promise.resolve({ count: 0, duration: 0 }),
+    } as unknown as D1Database
+    return { db, runs }
+  }
+
+  it('proceeds to phase-4 even with zero tasks when priority resolver and phase-3 agents are done', async () => {
+    const events: DashboardEvent[] = []
+    const { db, runs } = makeMockD1Phase3({ tasks: 0, priorityResolverDone: true, phase3AgentsDone: true })
+    const env = makeMockEnvForAlarm(db, events)
+    const coordinator = new CoordinatorDurableObject({ storage: { setAlarm: vi.fn() } } as unknown as DurableObjectState, env)
+    ;(coordinator as any).auditRunId = 'run-zero-tasks'
+    ;(coordinator as any).tenantId = 'tenant-1'
+
+    await coordinator.alarm()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const phaseUpdate = runs.find(r =>
+      r.sql.toLowerCase().includes('update run_budget') &&
+      r.sql.includes('phase-4')
+    )
+    expect(phaseUpdate).toBeDefined()
+    expect(events.some(e => e.type === 'task_created')).toBe(true)
+    const taskEvent = events.find(e => e.type === 'task_created')
+    expect(taskEvent?.payload.message).toMatch(/no findings/i)
+  })
+
+  it('does not proceed to phase-4 while phase-3 agents are still running', async () => {
+    const events: DashboardEvent[] = []
+    const { db, runs } = makeMockD1Phase3({ tasks: 1, priorityResolverDone: true, phase3AgentsDone: false })
+    const env = makeMockEnvForAlarm(db, events)
+    const coordinator = new CoordinatorDurableObject({ storage: { setAlarm: vi.fn() } } as unknown as DurableObjectState, env)
+    ;(coordinator as any).auditRunId = 'run-phase3-running'
+    ;(coordinator as any).tenantId = 'tenant-1'
+
+    await coordinator.alarm()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const phaseUpdate = runs.find(r =>
+      r.sql.toLowerCase().includes('update run_budget') &&
+      r.sql.includes('phase-4')
+    )
+    expect(phaseUpdate).toBeUndefined()
   })
 })

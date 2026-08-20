@@ -223,6 +223,35 @@ async function ensureAuditSession(
     .run()
 }
 
+async function markSessionFailed(
+  tenantId: string,
+  auditRunId: string,
+  db: D1Database,
+  reason: string
+): Promise<void> {
+  await db
+    .prepare(`
+      INSERT OR IGNORE INTO audit_sessions (
+        id, tenant_id, status, total_files, repo_url, repo_branch, last_commit_sha, created_at
+      ) VALUES (?, ?, 'failed', 0, '', 'main', NULL, unixepoch())
+    `)
+    .bind(auditRunId, tenantId)
+    .run()
+
+  await db
+    .prepare('UPDATE audit_sessions SET status = \'failed\' WHERE id = ? AND tenant_id = ?')
+    .bind(auditRunId, tenantId)
+    .run()
+
+  await db
+    .prepare(`
+      INSERT INTO audit_logs (tenant_id, audit_run_id, agent_id, event_type, event_data)
+      VALUES (?, ?, ?, ?, ?)
+    `)
+    .bind(tenantId, auditRunId, null, 'ingestion_failed', JSON.stringify({ reason }))
+    .run()
+}
+
 async function ensureRepoGroupMembership(
   tenantId: string,
   groupId: string,
@@ -289,6 +318,7 @@ interface ParsedRepoFiles {
   commitSha?: string
   repoGroupId?: string
   selectedPaths?: string[]
+  githubTokenOverride?: string
 }
 
 async function parseRepoFiles(request: Request, env: Env, tenantId: string): Promise<ParsedRepoFiles | Response> {
@@ -334,16 +364,18 @@ async function parseRepoFiles(request: Request, env: Env, tenantId: string): Pro
     const selectedPaths = Array.isArray(b.selected_paths) && b.selected_paths.every((p: unknown) => typeof p === 'string')
       ? (b.selected_paths as string[])
       : undefined
+    const auditRunId = typeof b.audit_run_id === 'string' ? b.audit_run_id : `github-${Date.now()}`
+    const tokenOverride = typeof b.github_token_override === 'string' ? b.github_token_override : undefined
     try {
-      let files = await getRepoFiles(b.repo_url, branch, tenantId, env)
+      let files = await getRepoFiles(b.repo_url, branch, tenantId, env, tokenOverride)
       if (selectedPaths && selectedPaths.length > 0) {
         const selectedSet = new Set(selectedPaths)
         files = files.filter(f => selectedSet.has(f.path))
       }
-      const auditRunId = typeof b.audit_run_id === 'string' ? b.audit_run_id : `github-${Date.now()}`
-      return { auditRunId, files, repoUrl: b.repo_url, branch, commitSha, repoGroupId, selectedPaths }
+      return { auditRunId, files, repoUrl: b.repo_url, branch, commitSha, repoGroupId, selectedPaths, githubTokenOverride: tokenOverride }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch repository files'
+      await markSessionFailed(tenantId, auditRunId, env.DB, msg)
       return new Response(JSON.stringify({ error: msg }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },

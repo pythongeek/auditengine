@@ -22,35 +22,63 @@ export function parseRepoUrl(repoUrl: string, branch?: string): RepoUrlParts | n
   return { owner: match[1], repo: match[2], ref: branch || 'HEAD' }
 }
 
-export async function fetchRepoFiles(
-  repoUrl: string,
-  branch: string | undefined,
-  githubToken: string
-): Promise<RepoFile[]> {
-  const parsed = parseRepoUrl(repoUrl)
-  if (!parsed) {
-    throw new Error(`Unsupported repo URL: ${repoUrl}`)
-  }
+const MAX_RETRIES = 3
+const INITIAL_DELAY_MS = 100
 
-  const ref = branch || parsed.ref
-  const url = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/zipball/${ref}`
-
+function makeHeaders(token: string, includeApiVersion = true): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.v3+json',
-    'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'AuditEngine/1.0',
   }
-  if (githubToken) {
-    headers.Authorization = `Bearer ${githubToken}`
+  if (includeApiVersion) {
+    headers['X-GitHub-Api-Version'] = '2022-11-28'
   }
-
-  const res = await fetch(url, { headers })
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => 'unknown error')
-    throw new Error(`GitHub fetch failed: ${res.status} ${text}`)
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
   }
+  return headers
+}
 
+function isTransientStatus(status: number): boolean {
+  return status === 429 || status === 403 || status >= 500
+}
+
+function isApiZipballTransient(status: number): boolean {
+  // GitHub may return 403, 404, or 429 for rate limits / transient blocks from shared IPs.
+  return status === 429 || status === 403 || status === 404 || status >= 500
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  isTransient: (status: number) => boolean,
+  retries = MAX_RETRIES,
+  delay = INITIAL_DELAY_MS
+): Promise<Response> {
+  let lastError: Error | undefined
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(url, init)
+      if (!isTransient(res.status) || i === retries) {
+        return res
+      }
+      const retryAfter = res.headers.get('Retry-After')
+      const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : delay * (2 ** i)
+      await sleep(waitMs)
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+      if (i === retries) break
+      await sleep(delay * (2 ** i))
+    }
+  }
+  throw lastError ?? new Error(`Fetch failed after ${retries} retries: ${url}`)
+}
+
+async function extractAndNormalizeZipball(res: Response): Promise<RepoFile[]> {
   const buffer = await res.arrayBuffer()
   const files = await extractZipFiles(buffer)
 
@@ -62,6 +90,53 @@ export async function fetchRepoFiles(
     content: f.content,
     lastModified: f.lastModified,
   }))
+}
+
+export async function fetchRepoFiles(
+  repoUrl: string,
+  branch: string | undefined,
+  githubToken: string
+): Promise<RepoFile[]> {
+  const parsed = parseRepoUrl(repoUrl)
+  if (!parsed) {
+    throw new Error(`Unsupported repo URL: ${repoUrl}`)
+  }
+
+  const ref = branch || parsed.ref
+  const apiUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/zipball/${ref}`
+  const headers = makeHeaders(githubToken)
+
+  // Primary path: GitHub API zipball (fastest, one request for the whole repo).
+  let apiError: Error | undefined
+  try {
+    const res = await fetchWithRetry(apiUrl, { headers }, isApiZipballTransient)
+    if (res.ok) {
+      return await extractAndNormalizeZipball(res)
+    }
+    const text = await res.text().catch(() => 'unknown error')
+    apiError = new Error(`GitHub API zipball failed: ${res.status} ${text}`)
+  } catch (err) {
+    apiError = err instanceof Error ? err : new Error(String(err))
+  }
+
+  // Fallback path: web archive URL for public repos. This bypasses the GitHub
+  // API rate limits that shared Cloudflare egress IPs hit on api.github.com.
+  if (!githubToken) {
+    try {
+      const webUrl = `https://github.com/${parsed.owner}/${parsed.repo}/archive/${encodeURIComponent(ref)}.zip`
+      const webRes = await fetchWithRetry(webUrl, { headers: makeHeaders('', false) }, isTransientStatus)
+      if (webRes.ok) {
+        return await extractAndNormalizeZipball(webRes)
+      }
+    } catch {
+      // fall through to final error
+    }
+  }
+
+  const hint = githubToken
+    ? 'Check that your GitHub token has access to this repository and ref.'
+    : 'GitHub API rate limit likely exceeded from Cloudflare egress IPs. Configure a GitHub token in Settings, or ensure the repository is public and accessible.'
+  throw new Error(`${apiError?.message ?? 'GitHub fetch failed'} (${hint})`)
 }
 
 function findCommonPrefix(paths: string[]): string | null {
@@ -86,20 +161,16 @@ export async function listRepoFiles(
 
   const ref = branch || parsed.ref
   const url = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`
+  const headers = makeHeaders(githubToken)
 
-  const headers: Record<string, string> = {
-    Accept: 'application/vnd.github.v3+json',
-    'User-Agent': 'AuditEngine/1.0',
-  }
-  if (githubToken) {
-    headers.Authorization = `Bearer ${githubToken}`
-  }
-
-  const res = await fetch(url, { headers })
+  const res = await fetchWithRetry(url, { headers }, isTransientStatus)
 
   if (!res.ok) {
     const text = await res.text().catch(() => 'unknown error')
-    throw new Error(`GitHub list files failed: ${res.status} ${text}`)
+    const hint = res.status === 404 && !githubToken
+      ? ' (If this is a private repository, please configure your GitHub token in Settings)'
+      : ''
+    throw new Error(`GitHub list files failed: ${res.status} ${text}${hint}`)
   }
 
   const data = await res.json() as { tree?: Array<{ path: string; type: string }> }
@@ -119,17 +190,11 @@ export async function fetchFileContent(
 ): Promise<string | null> {
   const encodedPath = path.split('/').map(encodeURIComponent).join('/')
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`
-  const headers: Record<string, string> = {
-    Accept: 'application/vnd.github.v3+json',
-    'User-Agent': 'AuditEngine/1.0',
-  }
-  if (githubToken) {
-    headers.Authorization = `Bearer ${githubToken}`
-  }
+  const headers = makeHeaders(githubToken)
 
-  const res = await fetch(url, { headers })
+  const res = await fetchWithRetry(url, { headers }, isTransientStatus).catch(() => null)
+  if (!res || res.status !== 200) return null
 
-  if (res.status !== 200) return null
   const data = await res.json() as { content?: string; encoding?: string }
   if (data.encoding === 'base64' && data.content) {
     return atob(data.content.replace(/\n/g, ''))
@@ -144,16 +209,10 @@ export async function fetchDiff(
   githubToken: string
 ): Promise<unknown> {
   const url = `https://api.github.com/repos/${owner}/${repo}/commits/${commitSha}`
-  const headers: Record<string, string> = {
-    Accept: 'application/vnd.github.v3+json',
-    'User-Agent': 'AuditEngine/1.0',
-  }
-  if (githubToken) {
-    headers.Authorization = `Bearer ${githubToken}`
-  }
-  const res = await fetch(url, { headers })
+  const headers = makeHeaders(githubToken)
+  const res = await fetchWithRetry(url, { headers }, isTransientStatus).catch(() => null)
 
-  if (res.status !== 200) return null
+  if (!res || res.status !== 200) return null
   return res.json()
 }
 

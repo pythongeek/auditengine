@@ -87,6 +87,7 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
     #status.err { color: var(--red); }
     #loginWarning { color: var(--red); margin-bottom: 1rem; display: none; }
     #tokenStatus { font-size: 0.85rem; color: var(--muted); margin-bottom: 1rem; }
+    #tokenWarning { color: var(--red); font-size: 0.85rem; margin-top: 0.5rem; display: none; }
     .repo-chip {
       display: inline-block;
       background: var(--bg);
@@ -189,7 +190,14 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
         </div>
         <button class="btn secondary" id="loadFilesBtn" type="button">Load files</button>
       </div>
-      <div class="hint">Enter a GitHub, GitLab, or Bitbucket repo URL to audit it directly. Leave blank to upload/paste files instead. Make sure a Git provider token is saved in <a href="/settings" style="color: var(--accent);">Settings</a> for private repos.</div>
+      <div class="repo-field-row" style="margin-top: 0.75rem;">
+        <div class="field">
+          <label for="githubToken" style="margin-top: 0;">GitHub Personal Access Token (optional)</label>
+          <input type="password" id="githubToken" placeholder="ghp_..." autocomplete="off" />
+        </div>
+      </div>
+      <div id="tokenWarning"></div>
+      <div class="hint">Enter a GitHub, GitLab, or Bitbucket repo URL to audit it directly. Leave blank to upload/paste files instead. A token is required for private repos and helps avoid public-repo rate limits. Tokens entered here are used only for this audit.</div>
 
       <div id="fileListSection" class="hidden">
         <div class="file-list-toolbar">
@@ -250,6 +258,8 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
     const fileListCount = document.getElementById('fileListCount');
     const fileListLoading = document.getElementById('fileListLoading');
     const fileListError = document.getElementById('fileListError');
+    const githubTokenInput = document.getElementById('githubToken');
+    const tokenWarning = document.getElementById('tokenWarning');
 
     const token = localStorage.getItem('auditengine_token');
     const tenantId = localStorage.getItem('auditengine_tenant');
@@ -272,6 +282,20 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
     if (prefillBranch) {
       branchInput.value = prefillBranch;
     }
+
+    function updateTokenWarning() {
+      const url = repoUrlInput.value.trim();
+      const token = githubTokenInput.value.trim();
+      if (url.includes('github.com') && !token) {
+        tokenWarning.style.display = 'block';
+        tokenWarning.textContent = 'No GitHub token entered. Public repo audits may hit rate limits; private repos require a token.';
+      } else {
+        tokenWarning.style.display = 'none';
+      }
+    }
+    repoUrlInput.addEventListener('input', updateTokenWarning);
+    githubTokenInput.addEventListener('input', updateTokenWarning);
+    updateTokenWarning();
 
     let loadedRepoFiles = [];
     let loadedRepoUrl = '';
@@ -358,13 +382,14 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
       fileListError.classList.add('hidden');
       loadFilesBtn.disabled = true;
       try {
+        const tokenOverride = githubTokenInput.value.trim();
         const res = await fetch('/api/v1/repo/files', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: 'Bearer ' + token,
           },
-          body: JSON.stringify({ repo_url: repoUrl, branch: branch || undefined }),
+          body: JSON.stringify({ repo_url: repoUrl, branch: branch || undefined, github_token_override: tokenOverride || undefined }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -463,6 +488,8 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
         if (repoUrl) {
           body.repo_url = repoUrl;
           if (branch) body.branch = branch;
+          const tokenOverride = githubTokenInput.value.trim();
+          if (tokenOverride) body.github_token_override = tokenOverride;
           if (loadedRepoFiles.length > 0 && repoUrl === loadedRepoUrl && branch === loadedBranch) {
             const selected = loadedRepoFiles.filter(f => f.selected).map(f => f.path);
             body.selected_paths = selected;
@@ -516,6 +543,18 @@ export const AUDIT_NEW_HTML = `<!DOCTYPE html>
         startBtn.disabled = false;
       }
     });
+
+    function decorateNavLinks() {
+      const auditRunId = localStorage.getItem('auditengine_audit_run_id');
+      document.querySelectorAll('nav a').forEach(a => {
+        const href = a.getAttribute('href');
+        if (!href || href === '#' || href.startsWith('http')) return;
+        const u = new URL(href, location.origin);
+        if (auditRunId) u.searchParams.set('audit_run_id', auditRunId);
+        a.href = u.pathname + u.search;
+      });
+    }
+    decorateNavLinks();
   </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-import type { Env, AgentType, Task, Finding, Tenant, AuditSession } from '../types/index'
+import type { Env, AgentType, Task, Finding, Tenant, AuditSession, AgentRegistryRow, Repository } from '../types/index'
 import ingestionWorker from '../workers/ingestion'
 import { verifyTask } from '../workers/verification'
 import { runVisualQA } from '../workers/visual-qa'
@@ -9,12 +9,16 @@ import { LOGIN_HTML } from '../dashboard/login-html'
 import { TENANT_SELECTOR_HTML } from '../dashboard/tenant-selector-html'
 import { AUDIT_LIST_HTML } from '../dashboard/audit-list-html'
 import { TASK_BOARD_HTML } from '../dashboard/task-board-html'
+import { TASK_DETAIL_HTML } from '../dashboard/task-detail-html'
 import { FINDING_DETAIL_HTML } from '../dashboard/finding-detail-html'
 import { ONBOARDING_HTML } from '../dashboard/onboarding-html'
 import { SETTINGS_HTML } from '../dashboard/settings-html'
 import { REPOS_HTML } from '../dashboard/repos-html'
 import { listAgentConfigs, setAgentConfig, ALL_AGENT_TYPES } from './agent-config'
-import { createOAuthState, verifyOAuthState, isAdmin, createToken } from './auth'
+import {
+  createOAuthState, verifyOAuthState, isAdmin, createToken,
+  hashPassword, verifyPassword, createUserSession, revokeUserSession,
+} from './auth'
 import { encryptToken } from './token-crypto'
 import { listMaskedSettings, storeProviderApiKey, storeGitProviderToken } from './settings'
 import { getOpenApiSpec } from './openapi'
@@ -22,7 +26,8 @@ import { createBranch, commitFiles, createPullRequest, type RepoFileChange } fro
 import { getTokenForTenant as getGitHubTokenForTenant } from './github'
 import { getTokenForTenant as getGitLabTokenForTenant } from './gitlab'
 import { getTokenForTenant as getBitbucketTokenForTenant } from './bitbucket'
-import { listRepoFiles } from './git-router'
+import { listRepoFiles, parseRepoUrl, getProvider } from './git-router'
+import { applyFixForTask, generateFixForTask } from '../workers/fix-agent'
 
 const validAgentTypes = new Set<AgentType>(ALL_AGENT_TYPES)
 
@@ -81,7 +86,7 @@ export function handleDashboardGet(): Response {
   return htmlResponse(DASHBOARD_HTML)
 }
 
-export function handleLogin(): Response {
+export function handleLoginPage(): Response {
   return htmlResponse(LOGIN_HTML)
 }
 
@@ -99,6 +104,10 @@ export function handleTaskBoard(): Response {
 
 export function handleFindingDetail(): Response {
   return htmlResponse(FINDING_DETAIL_HTML)
+}
+
+export function handleTaskDetailPage(): Response {
+  return htmlResponse(TASK_DETAIL_HTML)
 }
 
 export function handleOnboarding(): Response {
@@ -181,6 +190,7 @@ export async function handleRepoFileList(env: Env, request: Request, tenantId: s
   let body: {
     repo_url?: string
     branch?: string
+    github_token_override?: string
   } = {}
 
   try {
@@ -195,7 +205,7 @@ export async function handleRepoFileList(env: Env, request: Request, tenantId: s
       return errorResponse('Missing repo_url', 400)
     }
 
-    const files = await listRepoFiles(body.repo_url, body.branch, tenantId, env)
+    const files = await listRepoFiles(body.repo_url, body.branch, tenantId, env, body.github_token_override)
     return jsonResponse({ files })
   } catch (err) {
     return errorResponse(err instanceof Error ? err.message : 'Failed to list repository files', 500)
@@ -211,6 +221,7 @@ export async function handleAuditStart(request: Request, env: Env, tenantId: str
     commit_sha?: string
     repo_group_id?: string
     selected_paths?: string[]
+    github_token_override?: string
   } = {}
 
   try {
@@ -231,6 +242,23 @@ export async function handleAuditStart(request: Request, env: Env, tenantId: str
       return errorResponse('Missing audit_run_id or files/repo_url', 400)
     }
 
+    // Pre-create the audit session so the run is visible and traceable even if
+    // ingestion fails immediately or the workflow aborts.
+    await env.DB
+      .prepare(`
+        INSERT OR IGNORE INTO audit_sessions (
+          id, tenant_id, status, total_files, repo_url, repo_branch, last_commit_sha, created_at
+        ) VALUES (?, ?, 'pending', 0, ?, ?, ?, unixepoch())
+      `)
+      .bind(
+        body.audit_run_id,
+        tenantId,
+        body.repo_url ?? '',
+        body.branch ?? 'main',
+        body.commit_sha ?? null
+      )
+      .run()
+
     // Repo ingestion can be long-running (hundreds of files / large zipballs) and
     // exceeds the HTTP request's waitUntil/CPU budget. Route repo audits through
     // a Cloudflare Workflow, which has a much longer execution window. File-only
@@ -247,6 +275,7 @@ export async function handleAuditStart(request: Request, env: Env, tenantId: str
           commit_sha: body.commit_sha,
           repo_group_id: body.repo_group_id,
           selected_paths: body.selected_paths,
+          github_token_override: body.github_token_override,
         },
       })
       return jsonResponse({ audit_run_id: body.audit_run_id, status: 'queued' }, 202)
@@ -265,6 +294,7 @@ export async function handleAuditStart(request: Request, env: Env, tenantId: str
             commit_sha: body.commit_sha,
             repo_group_id: body.repo_group_id,
             selected_paths: body.selected_paths,
+            github_token_override: body.github_token_override,
           }),
           headers: { 'Content-Type': 'application/json' },
         })
@@ -369,6 +399,8 @@ export async function handleTenantCreate(env: Env, body: unknown): Promise<Respo
   const b = body as Record<string, unknown>
   const name = typeof b.name === 'string' && b.name.trim().length > 0 ? b.name.trim() : undefined
   const plan = typeof b.plan === 'string' ? b.plan : 'free'
+  const adminEmail = typeof b.admin_email === 'string' ? b.admin_email.trim() : undefined
+  const adminPassword = typeof b.admin_password === 'string' ? b.admin_password : undefined
 
   const tenantId = generateTenantId()
   const displayName = name || tenantId
@@ -383,14 +415,27 @@ export async function handleTenantCreate(env: Env, body: unknown): Promise<Respo
     .bind(tenantId, displayName, plan)
     .run()
 
+  let user: { id: string; email: string; role: string } | undefined
+  if (adminEmail && adminPassword) {
+    const userId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('')
+    const passwordHash = await hashPassword(adminPassword)
+    await env.DB
+      .prepare('INSERT INTO users (id, tenant_id, email, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())')
+      .bind(userId, tenantId, adminEmail, passwordHash, 'admin')
+      .run()
+    user = { id: userId, email: adminEmail, role: 'admin' }
+  }
+
   const token = await createToken(tenantId, env.JWT_SECRET, plan, 365 * 24 * 3600)
 
   await env.DB
     .prepare('INSERT INTO audit_logs (tenant_id, audit_run_id, agent_id, event_type, event_data) VALUES (?, ?, ?, ?, ?)')
-    .bind(tenantId, '', null, 'tenant_created', JSON.stringify({ plan }))
+    .bind(tenantId, '', null, 'tenant_created', JSON.stringify({ plan, has_admin_user: !!user }))
     .run()
 
-  return jsonResponse({ tenant: { id: tenantId, name: displayName, plan }, token }, 201)
+  return jsonResponse({ tenant: { id: tenantId, name: displayName, plan }, user, token }, 201)
 }
 
 export async function handleTenantGet(env: Env, tenantId: string): Promise<Response> {
@@ -404,6 +449,91 @@ export async function handleTenantGet(env: Env, tenantId: string): Promise<Respo
   }
 
   return jsonResponse({ tenant: row })
+}
+
+function generateUserId(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+export async function handleRegister(env: Env, body: unknown): Promise<Response> {
+  if (!body || typeof body !== 'object') {
+    return errorResponse('Invalid JSON body', 400)
+  }
+  const b = body as Record<string, unknown>
+  const tenantId = typeof b.tenant_id === 'string' ? b.tenant_id.trim() : ''
+  const email = typeof b.email === 'string' ? b.email.trim().toLowerCase() : ''
+  const password = typeof b.password === 'string' ? b.password : ''
+  const role = b.role === 'admin' || b.role === 'member' ? b.role : 'member'
+
+  if (!tenantId || !email || !password) {
+    return errorResponse('Missing tenant_id, email, or password', 400)
+  }
+
+  const tenant = await env.DB.prepare('SELECT id FROM tenants WHERE id = ?').bind(tenantId).first()
+  if (!tenant) {
+    return errorResponse('Tenant not found', 404)
+  }
+
+  const existing = await env.DB
+    .prepare('SELECT 1 FROM users WHERE tenant_id = ? AND email = ?')
+    .bind(tenantId, email)
+    .first()
+  if (existing) {
+    return errorResponse('User already exists for this tenant', 409)
+  }
+
+  const userId = generateUserId()
+  const passwordHash = await hashPassword(password)
+
+  await env.DB
+    .prepare('INSERT INTO users (id, tenant_id, email, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())')
+    .bind(userId, tenantId, email, passwordHash, role)
+    .run()
+
+  return jsonResponse({ user: { id: userId, tenant_id: tenantId, email, role } }, 201)
+}
+
+export async function handleLogin(env: Env, body: unknown): Promise<Response> {
+  if (!body || typeof body !== 'object') {
+    return errorResponse('Invalid JSON body', 400)
+  }
+  const b = body as Record<string, unknown>
+  const tenantId = typeof b.tenant_id === 'string' ? b.tenant_id.trim() : ''
+  const email = typeof b.email === 'string' ? b.email.trim().toLowerCase() : ''
+  const password = typeof b.password === 'string' ? b.password : ''
+
+  if (!tenantId || !email || !password) {
+    return errorResponse('Missing tenant_id, email, or password', 400)
+  }
+
+  const user = await env.DB
+    .prepare('SELECT id, tenant_id, email, password_hash, role, plan FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.tenant_id = ? AND u.email = ?')
+    .bind(tenantId, email)
+    .first<{ id: string; tenant_id: string; email: string; password_hash: string; role: string; plan: string }>()
+
+  if (!user) {
+    return errorResponse('Invalid credentials', 401)
+  }
+
+  const valid = await verifyPassword(password, user.password_hash)
+  if (!valid) {
+    return errorResponse('Invalid credentials', 401)
+  }
+
+  const token = await createUserSession(user.id, user.tenant_id, env.DB)
+
+  return jsonResponse({
+    user: { id: user.id, tenant_id: user.tenant_id, email: user.email, role: user.role },
+    tenant: { id: user.tenant_id, plan: user.plan ?? 'free' },
+    token,
+  })
+}
+
+export async function handleLogout(env: Env, request: Request): Promise<Response> {
+  await revokeUserSession(request, env)
+  return jsonResponse({ success: true })
 }
 
 export async function handleGitBranch(env: Env, tenantId: string, body: unknown): Promise<Response> {
@@ -466,7 +596,31 @@ export async function handleAuditList(env: Env, tenantId: string): Promise<Respo
     .bind(tenantId)
     .all<AuditSession>()
 
-  return jsonResponse({ tenant_id: tenantId, audits: rows.results ?? [] })
+  const sessions = rows.results ?? []
+  const failures: Record<string, string> = {}
+  const failedIds = sessions.filter(s => s.status === 'failed').map(s => s.id)
+
+  if (failedIds.length > 0) {
+    const placeholders = failedIds.map(() => '?').join(',')
+    const logs = await env.DB
+      .prepare(`SELECT audit_run_id, event_data FROM audit_logs WHERE event_type = 'workflow_failed' AND audit_run_id IN (${placeholders}) ORDER BY created_at DESC`)
+      .bind(...failedIds)
+      .all<{ audit_run_id: string; event_data: string }>()
+
+    const seen = new Set<string>()
+    for (const log of (logs.results ?? [])) {
+      if (seen.has(log.audit_run_id)) continue
+      seen.add(log.audit_run_id)
+      try {
+        const data = JSON.parse(log.event_data) as { reason?: string }
+        if (data.reason) failures[log.audit_run_id] = data.reason
+      } catch {
+        // ignore malformed JSON
+      }
+    }
+  }
+
+  return jsonResponse({ tenant_id: tenantId, audits: sessions, failures })
 }
 
 export async function handleAuditDetail(env: Env, tenantId: string, auditRunId: string): Promise<Response> {
@@ -500,6 +654,86 @@ export async function handleAuditDetail(env: Env, tenantId: string, auditRunId: 
       by_severity: severityCounts.results ?? [],
     },
   })
+}
+
+export async function handleRepoList(env: Env, tenantId: string): Promise<Response> {
+  const rows = await env.DB
+    .prepare('SELECT id, tenant_id, provider, owner, repo, url, default_branch, is_active, created_at, updated_at FROM repositories WHERE tenant_id = ? ORDER BY created_at DESC')
+    .bind(tenantId)
+    .all<Repository>()
+
+  return jsonResponse({ tenant_id: tenantId, repositories: rows.results ?? [] })
+}
+
+export async function handleRepoCreate(env: Env, tenantId: string, body: unknown): Promise<Response> {
+  if (!body || typeof body !== 'object') {
+    return errorResponse('Invalid JSON body', 400)
+  }
+  const b = body as Record<string, unknown>
+  const url = typeof b.url === 'string' ? b.url.trim() : ''
+  const defaultBranch = typeof b.default_branch === 'string' ? b.default_branch.trim() : 'main'
+
+  if (!url) return errorResponse('Missing repository URL', 400)
+
+  const parsed = parseRepoUrl(url)
+  const provider = parsed ? getProvider(url) : (typeof b.provider === 'string' ? b.provider : 'github')
+  const owner = parsed?.owner ?? (typeof b.owner === 'string' ? b.owner : null)
+  const repo = parsed?.repo ?? (typeof b.repo === 'string' ? b.repo : null)
+
+  const id = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+
+  try {
+    await env.DB
+      .prepare('INSERT INTO repositories (id, tenant_id, provider, owner, repo, url, default_branch, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, unixepoch(), unixepoch())')
+      .bind(id, tenantId, provider, owner, repo, url, defaultBranch)
+      .run()
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to add repository'
+    if (msg.includes('UNIQUE')) return errorResponse('Repository already bookmarked', 409)
+    return errorResponse(msg, 500)
+  }
+
+  return jsonResponse({ repository: { id, tenant_id: tenantId, provider, owner, repo, url, default_branch: defaultBranch, is_active: 1 } }, 201)
+}
+
+export async function handleRepoPatch(env: Env, tenantId: string, repoId: string, body: unknown): Promise<Response> {
+  if (!body || typeof body !== 'object') {
+    return errorResponse('Invalid JSON body', 400)
+  }
+  const b = body as Record<string, unknown>
+
+  const existing = await env.DB
+    .prepare('SELECT * FROM repositories WHERE id = ? AND tenant_id = ?')
+    .bind(repoId, tenantId)
+    .first<Repository>()
+  if (!existing) return errorResponse('Repository not found', 404)
+
+  const defaultBranch = typeof b.default_branch === 'string' ? b.default_branch.trim() : existing.default_branch
+  const isActive = typeof b.is_active === 'boolean' ? (b.is_active ? 1 : 0) : existing.is_active
+
+  await env.DB
+    .prepare('UPDATE repositories SET default_branch = ?, is_active = ?, updated_at = unixepoch() WHERE id = ?')
+    .bind(defaultBranch, isActive, repoId)
+    .run()
+
+  return jsonResponse({ repository: { ...existing, default_branch: defaultBranch, is_active: isActive } })
+}
+
+export async function handleRepoDelete(env: Env, tenantId: string, repoId: string): Promise<Response> {
+  const existing = await env.DB
+    .prepare('SELECT 1 FROM repositories WHERE id = ? AND tenant_id = ?')
+    .bind(repoId, tenantId)
+    .first()
+  if (!existing) return errorResponse('Repository not found', 404)
+
+  await env.DB
+    .prepare('DELETE FROM repositories WHERE id = ? AND tenant_id = ?')
+    .bind(repoId, tenantId)
+    .run()
+
+  return jsonResponse({ deleted: true })
 }
 
 export async function handleTenantScoreGet(env: Env, tenantId: string): Promise<Response> {
@@ -827,7 +1061,8 @@ export async function handleTaskFixPost(
   env: Env,
   tenantId: string,
   auditRunId: string,
-  taskId: string
+  taskId: string,
+  body: unknown = {}
 ): Promise<Response> {
   const owns = await verifyAuditRunTenant(env.DB, auditRunId, tenantId)
   if (!owns) return errorResponse('Audit run not found', 404)
@@ -839,12 +1074,109 @@ export async function handleTaskFixPost(
   if (!task) return errorResponse('Task not found', 404)
   if (task.status === 'done') return errorResponse('Task is already done', 400)
 
-  const { applyFixForTask } = await import('../workers/fix-agent')
+  const b = body && typeof body === 'object' ? body as Record<string, unknown> : {}
+  const customPrompt = typeof b.custom_prompt === 'string' ? b.custom_prompt : undefined
+
   const result = await applyFixForTask(taskId, env)
   if (!result.ok) return errorResponse(result.error ?? 'Fix failed', 500)
 
-  await logTaskEvent(env.DB, tenantId, auditRunId, taskId, 'fix_applied', { branch: result.branch, commit_sha: result.commit_sha, pr_url: result.pr_url })
+  await logTaskEvent(env.DB, tenantId, auditRunId, taskId, 'fix_applied', { branch: result.branch, commit_sha: result.commit_sha, pr_url: result.pr_url, custom_prompt: customPrompt })
   return jsonResponse({ task_id: taskId, status: 'in_review', branch: result.branch, commit_sha: result.commit_sha, pr_url: result.pr_url })
+}
+
+export async function handleTaskDetailGet(
+  env: Env,
+  tenantId: string,
+  auditRunId: string,
+  taskId: string
+): Promise<Response> {
+  const owns = await verifyAuditRunTenant(env.DB, auditRunId, tenantId)
+  if (!owns) return errorResponse('Audit run not found', 404)
+
+  const task = await env.DB
+    .prepare('SELECT * FROM tasks WHERE task_id = ? AND audit_run_id = ?')
+    .bind(taskId, auditRunId)
+    .first<Task>()
+  if (!task) return errorResponse('Task not found', 404)
+
+  const audit = await env.DB
+    .prepare('SELECT repo_url, repo_branch, status FROM audit_sessions WHERE id = ?')
+    .bind(auditRunId)
+    .first<{ repo_url: string; repo_branch: string; status: string }>()
+
+  let findings: Finding[] = []
+  try {
+    const findingIds: string[] = JSON.parse(task.finding_ids || '[]')
+    if (findingIds.length > 0) {
+      const placeholders = findingIds.map(() => '?').join(',')
+      const rows = await env.DB
+        .prepare(`SELECT * FROM findings WHERE finding_id IN (${placeholders}) AND audit_run_id = ?`)
+        .bind(...findingIds, auditRunId)
+        .all<Finding>()
+      findings = rows.results ?? []
+    }
+  } catch {
+    findings = []
+  }
+
+  return jsonResponse({
+    tenant_id: tenantId,
+    audit_run_id: auditRunId,
+    task_id: taskId,
+    task,
+    audit,
+    findings,
+  })
+}
+
+export async function handleTaskFixPreview(
+  env: Env,
+  tenantId: string,
+  auditRunId: string,
+  taskId: string,
+  body: unknown = {}
+): Promise<Response> {
+  const owns = await verifyAuditRunTenant(env.DB, auditRunId, tenantId)
+  if (!owns) return errorResponse('Audit run not found', 404)
+
+  const task = await env.DB
+    .prepare('SELECT task_id, status FROM tasks WHERE task_id = ? AND audit_run_id = ?')
+    .bind(taskId, auditRunId)
+    .first<{ task_id: string; status: string }>()
+  if (!task) return errorResponse('Task not found', 404)
+  if (task.status === 'done') return errorResponse('Task is already done', 400)
+
+  const b = body && typeof body === 'object' ? body as Record<string, unknown> : {}
+  const customPrompt = typeof b.custom_prompt === 'string' ? b.custom_prompt : undefined
+
+  const result = await generateFixForTask(taskId, env, { dryRun: true, customPrompt })
+  if (!result.ok) return errorResponse(result.error ?? 'Preview failed', 500)
+
+  return jsonResponse({ task_id: taskId, preview: result.preview })
+}
+
+export async function handleTaskRelease(
+  env: Env,
+  tenantId: string,
+  auditRunId: string,
+  taskId: string
+): Promise<Response> {
+  const owns = await verifyAuditRunTenant(env.DB, auditRunId, tenantId)
+  if (!owns) return errorResponse('Audit run not found', 404)
+
+  const task = await env.DB
+    .prepare('SELECT status FROM tasks WHERE task_id = ? AND audit_run_id = ?')
+    .bind(taskId, auditRunId)
+    .first<{ status: string }>()
+  if (!task) return errorResponse('Task not found', 404)
+
+  await env.DB
+    .prepare("UPDATE tasks SET status = 'backlog', assigned_agent = ?, lock_expires_at = ?, updated_at = unixepoch() WHERE task_id = ?")
+    .bind(null, null, taskId)
+    .run()
+
+  await logTaskEvent(env.DB, tenantId, auditRunId, taskId, 'task_released', { from: task.status })
+  return jsonResponse({ task_id: taskId, status: 'backlog' })
 }
 
 export async function handleFindingList(
@@ -911,6 +1243,101 @@ export async function handleFindingPatch(
 
   await logTaskEvent(env.DB, tenantId, auditRunId, findingId, 'finding_status_changed', { from: finding.status, to: newStatus, reason: b.reason ?? null })
   return jsonResponse({ finding_id: findingId, status: newStatus })
+}
+
+export async function handleDashboardStateGet(
+  env: Env,
+  tenantId: string,
+  auditRunId: string
+): Promise<Response> {
+  const owns = await verifyAuditRunTenant(env.DB, auditRunId, tenantId)
+  if (!owns) return errorResponse('Audit run not found', 404)
+
+  const audit = await env.DB
+    .prepare(`
+      SELECT id, tenant_id, repo_url, repo_branch, status, total_files, files_analyzed,
+             findings_count, readiness_score, created_at, completed_at
+      FROM audit_sessions WHERE id = ?
+    `)
+    .bind(auditRunId)
+    .first<AuditSession>()
+
+  if (!audit) {
+    return errorResponse('Audit run not found', 404)
+  }
+
+  const agents = await env.DB
+    .prepare('SELECT * FROM agent_registry WHERE audit_run_id = ? ORDER BY spawned_at ASC')
+    .bind(auditRunId)
+    .all<AgentRegistryRow>()
+
+  const findings = await env.DB
+    .prepare(`
+      SELECT * FROM findings
+      WHERE audit_run_id = ? AND (tenant_id = ? OR tenant_id = '')
+      ORDER BY CASE severity
+        WHEN 'critical' THEN 1
+        WHEN 'high' THEN 2
+        WHEN 'medium' THEN 3
+        WHEN 'low' THEN 4
+        WHEN 'info' THEN 5
+      END, ts DESC
+      LIMIT 50
+    `)
+    .bind(auditRunId, tenantId)
+    .all<Finding>()
+
+  const tasks = await env.DB
+    .prepare('SELECT * FROM tasks WHERE audit_run_id = ? ORDER BY priority_score DESC, created_at DESC')
+    .bind(auditRunId)
+    .all<Task>()
+
+  const tokenUsage = await env.DB
+    .prepare(`
+      SELECT model, COUNT(*) as calls, SUM(prompt_tokens + completion_tokens) as tokens, SUM(cost_usd) as cost
+      FROM token_usage
+      WHERE audit_run_id = ?
+      GROUP BY model
+    `)
+    .bind(auditRunId)
+    .all<{ model: string; calls: number; tokens: number; cost: number }>()
+
+  const budget = await env.DB
+    .prepare('SELECT budget_usd, spent_usd FROM run_budget WHERE audit_run_id = ?')
+    .bind(auditRunId)
+    .first<{ budget_usd: number; spent_usd: number }>()
+
+  let errorBanner: string | null = null
+  if (audit.status === 'failed') {
+    const log = await env.DB
+      .prepare(`
+        SELECT event_data FROM audit_logs
+        WHERE audit_run_id = ? AND event_type IN ('workflow_failed', 'ingestion_failed')
+        ORDER BY created_at DESC LIMIT 1
+      `)
+      .bind(auditRunId)
+      .first<{ event_data: string }>()
+    if (log?.event_data) {
+      try {
+        const parsed = JSON.parse(log.event_data) as { reason?: string }
+        errorBanner = parsed.reason ?? log.event_data
+      } catch {
+        errorBanner = log.event_data
+      }
+    }
+  }
+
+  return jsonResponse({
+    tenant_id: tenantId,
+    audit_run_id: auditRunId,
+    audit,
+    agents: agents.results ?? [],
+    findings: findings.results ?? [],
+    tasks: tasks.results ?? [],
+    token_usage: tokenUsage.results ?? [],
+    budget: budget ?? { budget_usd: 0, spent_usd: 0 },
+    error_banner: errorBanner,
+  })
 }
 
 async function verifyGitHubSignature(body: ArrayBuffer, signature: string, secret: string): Promise<boolean> {

@@ -327,6 +327,18 @@ export async function tick(
     }
 
     case 'looping': {
+      if (state.currentFile) {
+        await env.DB
+          .prepare('UPDATE files SET last_analyzed_at = unixepoch() WHERE audit_run_id = ? AND path = ?')
+          .bind(state.auditRunId, state.currentFile)
+          .run()
+          .catch(() => {})
+        await env.DB
+          .prepare('UPDATE audit_sessions SET files_analyzed = (SELECT COUNT(DISTINCT file_path) FROM claims WHERE audit_run_id = ?) WHERE id = ?')
+          .bind(state.auditRunId, state.auditRunId)
+          .run()
+          .catch(() => {})
+      }
       await persistCursor(state.agentId, state.queueCursor, env.DB)
       return {
         ...state,
@@ -352,7 +364,7 @@ export async function tick(
         type: 'agent_state_change',
         audit_run_id: state.auditRunId,
         agent_id: state.agentId,
-        payload: { status: 'done' },
+        payload: { agent_type: state.agentType, agent_id: state.agentId, new_state: 'done', status: 'done' },
         ts: Date.now(),
       })
 
@@ -726,13 +738,32 @@ export class AgentDurableObject extends DurableObject<Env> {
       while (state.state !== 'done' && state.state !== 'paused') {
         state = await tick(state, this.env, broadcast, this.chunkCache)
         if (state.state !== previousState) {
+          if (state.state !== 'done' && state.state !== 'paused') {
+            await this.env.DB
+              .prepare("UPDATE agent_registry SET status = 'running' WHERE agent_id = ?")
+              .bind(agentId)
+              .run()
+              .catch(() => {})
+          }
+          broadcast({
+            type: 'agent_state_change',
+            audit_run_id: auditRunId,
+            agent_id: agentId,
+            payload: {
+              agent_type: agentType,
+              agent_id: agentId,
+              new_state: state.state,
+              file: state.currentFile,
+            },
+            ts: Date.now(),
+          })
           await writeAuditLog(
             this.env.DB,
             tenantId ?? '',
             auditRunId,
             agentId,
             'state_change',
-            { from: previousState, to: state.state }
+            { from: previousState, to: state.state, file: state.currentFile }
           )
           previousState = state.state
         }

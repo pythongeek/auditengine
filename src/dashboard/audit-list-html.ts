@@ -75,6 +75,10 @@ export const AUDIT_LIST_HTML = `<!DOCTYPE html>
       </thead>
       <tbody id="audits"></tbody>
     </table>
+    <style>
+      .status.failed { color: var(--red); font-weight: 600; }
+      .failure-reason { color: var(--muted); font-size: 0.75rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    </style>
     <p id="empty" class="empty" style="display:none">No audits found.</p>
   </main>
   <script>
@@ -105,11 +109,14 @@ export const AUDIT_LIST_HTML = `<!DOCTYPE html>
         empty.style.display = 'none';
         tbody.innerHTML = data.audits.map(a => {
           const scoreClass = a.readiness_score >= 80 ? 'high' : a.readiness_score >= 50 ? 'medium' : 'low';
+          const failureReason = a.status === 'failed' && data.failures && data.failures[a.id]
+            ? \`<div class="failure-reason" title="\${data.failures[a.id]}">\${data.failures[a.id]}</div>\`
+            : '';
           return \`
             <tr>
               <td>\${a.id}</td>
               <td>\${a.repo_url || '—'}</td>
-              <td>\${a.status}</td>
+              <td><span class="status \${a.status}">\${a.status}</span>\${failureReason}</td>
               <td class="score \${scoreClass}">\${a.readiness_score ?? 0}</td>
               <td>\${a.files_analyzed ?? 0} / \${a.total_files ?? 0}</td>
               <td>\${a.findings_count ?? 0}</td>
@@ -124,7 +131,19 @@ export const AUDIT_LIST_HTML = `<!DOCTYPE html>
         document.getElementById('error').textContent = err.message;
       }
     }
+    function decorateNavLinks() {
+      const auditRunId = localStorage.getItem('auditengine_audit_run_id');
+      document.querySelectorAll('nav a').forEach(a => {
+        const href = a.getAttribute('href');
+        if (!href || href === '#' || href.startsWith('http')) return;
+        const u = new URL(href, location.origin);
+        if (auditRunId) u.searchParams.set('audit_run_id', auditRunId);
+        a.href = u.pathname + u.search;
+      });
+    }
+
     load();
+    decorateNavLinks();
   </script>
 </body>
 </html>`

@@ -1,6 +1,6 @@
 # AuditEngine BUILD_STATE
-Last updated: 2026-08-18
-Session number: 56
+Last updated: 2026-08-21
+Session number: 65
 Tool: Kimi Code
 
 ## STATUS KEY
@@ -51,7 +51,7 @@ Tool: Kimi Code
 
 | File | Status | Notes |
 |------|--------|-------|
-| src/workers/coordinator.ts | ✅ | S08 — also added AgentDurableObject class to src/agents/base-agent.ts so S14 entry-point import resolves |
+| src/workers/coordinator.ts | ✅ | S08 — also added AgentDurableObject class to src/agents/base-agent.ts so S14 entry-point import resolves; S58 — hibernation fix: auditRunId/tenantId persisted in ctx.storage, restored in alarm(); step() executes immediately on /start; alarm interval 15s; agent_spawned broadcast |
 | src/workers/priority-resolver.ts | ✅ | S09 |
 | src/workers/verification.ts | ✅ | S10 |
 | src/workers/salvation.ts | ✅ | S11 |
@@ -465,15 +465,16 @@ Tool: Kimi Code
 (add entries here when something is broken, blocked, or unclear)
 
 - `auditengine-write-queue` consumer is bound but does not deliver messages in production; message delivery was resumed and the consumer was re-added without effect. `/audit/start` repo audits now bypass the queue and use `AUDIT_START_WORKFLOW` instead. Rate-limited config/task writes may still be affected if the queue remains stalled.
+- `auditengine-write-queue` consumer binding commented out in wrangler.toml (S58) due to Cloudflare API error 10013 blocking deploys. Queue producer still works; consumer must be re-enabled when Cloudflare resolves the issue.
 
 ---
 
 ## TYPE CHECK STATUS
-Last run: 2026-08-18
+Last run: 2026-08-19
 Result: PASS
 Errors: 0
-Tests: 221 backend tests passed (gate 21, model-router 21, auth 6, ingestion 8, agent-config 7, secrets 10, token-budget 9, rate-limiter 10, queue 6, coordinator 8, base-agent 4, shared-memory 3, workflows 3, external-research 6, salvation 5, tasks 10, verification 8, git-diff 4, webhooks 7, github-oauth 4, gitlab 6, bitbucket 7, repo-groups 5, dashboard-api 7, security-audit 7, cache 2, load-test 1, openapi 2, llm-gateway 6, settings 6)
-Note: S52 fixed dashboard/task-board/finding-detail WebSocket auth by passing tenant JWT via query parameter; added AUDIT_START_WORKFLOW binding and new audit-start workflow so repo audits run in a long-lived Workflow instead of the HTTP request's waitUntil budget; file-only audits continue to use waitUntil; updated repo-groups test for the new flow; dashboard now redirects to /login when no token is present
+Tests: 229 backend tests passed (33 test files)
+Note: S58 — Coordinator DO hibernation fix, agent lifecycle sync, private repo error hints; deployed to https://auditengine.tsnion.workers.dev (Version ID: e4621ea5-aedb-4594-9952-d6ee30aea789)
 
 ## S54 — REPO FILE TREE + SELECTED-PATH AUDITS
 
@@ -579,3 +580,120 @@ Note: S52 fixed dashboard/task-board/finding-detail WebSocket auth by passing te
 | test/planner.test.ts, test/fix-agent.test.ts | ✅ | 8 new cases; workflows test updated for new step |
 
 Type check: PASS. Tests: 229/229 PASS.
+
+## S58 — COORDINATOR DO HIBERNATION FIX + AGENT LIFECYCLE SYNC + PRIVATE REPO HINTS
+
+| File | Status | Notes |
+|------|-----------|-------|
+| src/workers/coordinator.ts | ✅ DONE | Persist auditRunId/tenantId in ctx.storage on /start; restore from storage in step(); execute step() immediately on /start (no 30s idle wait); alarm interval reduced to 15s; stop rescheduling alarm when phase='complete'; broadcast agent_spawned event from spawnAgent with safe DASHBOARD_DO check |
+| src/agents/base-agent.ts | ✅ DONE | Agent state loop updates agent_registry status='running' on state transitions; broadcasts agent_state_change with agent_type/agent_id/new_state/file; looping state updates files.last_analyzed_at and audit_sessions.files_analyzed; done state includes agent_type in payload |
+| src/lib/github.ts | ✅ DONE | fetchRepoFiles and listRepoFiles show private repo hint when GitHub returns 404 and no token is configured |
+| wrangler.toml | ✅ DONE | Commented out [[queues.consumers]] block to work around Cloudflare API error 10013 blocking deploys |
+
+Type check: PASS. Tests: 229/229 PASS. Deployed: e4621ea5-aedb-4594-9952-d6ee30aea789
+
+## S59 — GITHUB RATE LIMIT RESILIENCE + WEB ARCHIVE FALLBACK
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/lib/github.ts | ✅ DONE | Added `fetchWithRetry` helper with exponential backoff + `Retry-After` support; `fetchRepoFiles` retries API zipball and falls back to `github.com/owner/repo/archive/ref.zip` for public repos when no token is configured; `listRepoFiles`, `fetchFileContent`, and `fetchDiff` now use the same retry path |
+| test/github.test.ts | ✅ DONE | New dedicated GitHub provider tests: URL parsing, tenant/env token fallback, zipball fetch, transient retry, web-archive fallback, token-gated fallback behavior, tree listing, file content, and diff retrieval |
+
+Type check: PASS. Tests: 243/243 PASS.
+
+## S60 — WORKFLOW SILENT FAILURE FIX + FAILED AUDIT SURFACING
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/workflows/audit-start-workflow.ts | ✅ DONE | Wrapped workflow run in try/catch; on ingestion/coordinator failure calls `markAuditFailed` to set `audit_sessions.status = 'failed'`, ensure the session row exists, and write the reason to `audit_logs` as `workflow_failed`; re-throws the original error |
+| src/workers/ingestion.ts | ✅ DONE | `parseRepoFiles` now resolves `audit_run_id` before `getRepoFiles`; on repo download failure calls `markSessionFailed` to set `audit_sessions.status = 'failed'` and write `ingestion_failed` audit log |
+| src/lib/router.ts | ✅ DONE | `handleAuditList` now returns a `failures` map keyed by failed audit run IDs with the latest `workflow_failed` / `ingestion_failed` reason |
+| src/dashboard/audit-list-html.ts | ✅ DONE | Failed audits show the failure reason tooltip under the status column |
+| test/workflows.test.ts | ✅ DONE | Added `AuditStartWorkflow` tests: success path, ingestion failure marks session failed + audit log, coordinator failure marks session failed |
+| test/ingestion.test.ts | ✅ DONE | Added test asserting repo download failure marks session failed and writes ingestion audit log |
+
+Type check: PASS. Tests: 247/247 PASS.
+
+## S61 — LLM PROVIDER KEY FAIL-FAST + CROSS-PROVIDER FALLBACK
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/lib/llm-gateway.ts | ✅ DONE | Added `hasAnyProviderKey`; `llmCall` now falls back to the other provider when the routed provider has no key (kimi → minimax/m3, minimax → kimi/k2.6); if neither key exists, throws a clear error mentioning both providers were tried |
+| src/workers/coordinator.ts | ✅ DONE | Added `failAudit` helper; `step()` now checks `hasAnyProviderKey` at the start and marks the audit `failed` with a `workflow_failed` audit log when no provider keys are configured, preventing 19 agents from crashing |
+| test/llm-gateway.test.ts | ✅ DONE | Added `hasAnyProviderKey` tests and `llmCall` provider-fallback tests (kimi→minimax, minimax→kimi, neither-configured error) |
+| test/coordinator.test.ts | ✅ DONE | Added provider-key fail-fast test asserting the audit is marked failed and a `workflow_failed` log is written |
+
+Type check: PASS. Tests: 253/253 PASS.
+
+## S62 — PIPELINE CASCADE FAILURE FIX: ZERO-FINDINGS AUDITS COMPLETE
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/workers/coordinator.ts | ✅ DONE | Transition 4 (phase-3 → phase-4) now checks that `priority_resolver` is marked `done` in `agent_registry` and that all phase-3 agents are done, then unconditionally advances to phase-4. When `tasks` is empty it broadcasts `task_created` with message `No findings; no tasks generated`, so the audit pipeline does not get stuck when earlier phases produce no findings. |
+| test/coordinator.test.ts | ✅ DONE | Added `coordinator phase-3 to phase-4 transition` tests: proceeds to phase-4 with zero tasks when resolver + phase-3 agents are done, and does not proceed while phase-3 agents are still running. |
+
+Type check: PASS. Tests: 255/255 PASS.
+
+## S63 — USER & SESSION FOUNDATION (PHASE 1)
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/db/schema.sql | ✅ DONE | Added `users` and `user_sessions` tables with indexes and foreign keys. |
+| src/db/migrations/v15_users_sessions.sql | ✅ DONE | Idempotent migration creating the two tables and indexes. |
+| src/types/index.ts | ✅ DONE | Added `User`, `UserSession`, and extended `AuthContext` with optional `userId`/`role`. |
+| src/lib/auth.ts | ✅ DONE | Added PBKDF2 password hashing/verification, `createUserSession`, `verifyUserSession`, `revokeUserSession`, and made `authenticate()` fall back from tenant JWT to user session token. |
+| src/lib/router.ts | ✅ DONE | Added `handleRegister` (admin-only), `handleLogin`, `handleLogout`; updated `handleTenantCreate` to create an initial admin user. |
+| src/index.ts | ✅ DONE | Wired `/api/v1/auth/login`, `/api/v1/auth/register`, and protected `/api/v1/auth/logout`. |
+| src/dashboard/login-html.ts | ✅ DONE | Replaced raw JWT paste form with tenant/email/password login form. |
+| scripts/security-audit.ts | ✅ DONE | Whitelisted `/api/v1/auth/login` as a public route. |
+| test/auth-user.test.ts | ✅ DONE | Tests for password hashing, session lifecycle, login/register, and session-token authentication. |
+
+Type check: PASS. Tests: 263/263 PASS.
+
+## S64 — ROBUST INGESTION & AUDIT LIFECYCLE (PHASE 2)
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/lib/router.ts | ✅ DONE | `handleAuditStart` now pre-creates the `audit_sessions` row in `pending` before dispatching the workflow. `github_token_override` is accepted in the request body and forwarded to the workflow/file-only pipeline. `handleRepoFileList` also accepts the override. |
+| src/workflows/audit-start-workflow.ts | ✅ DONE | `AuditStartPayload` includes `github_token_override`; `markAuditFailed` now writes the failure reason to `agent_errors` as well as `audit_logs`. |
+| src/lib/git-router.ts | ✅ DONE | `listRepoFiles` and `getRepoFiles` accept an optional `tokenOverride`; GitHub, GitLab, and Bitbucket paths use it when provided. |
+| src/workers/ingestion.ts | ✅ DONE | Parses `github_token_override` from JSON/multipart ingest bodies and passes it to `getRepoFiles`. |
+| src/dashboard/audit-new-html.ts | ✅ DONE | Added optional GitHub PAT input, a rate-limit/token warning banner, and passes the override token when loading file lists and starting audits. |
+| scripts/security-audit.ts | ✅ DONE | Whitelisted `/api/v1/auth/login` and kept `/api/v1/auth/logout` routed through `handleProtectedRoute`. |
+| test/audit-start.test.ts | ✅ DONE | New tests asserting `audit_sessions` pre-creation and `github_token_override` propagation. |
+
+Type check: PASS. Tests: 265/265 PASS.
+
+## S65 — DASHBOARD HYDRATION, TASK STUDIO & REPO BOOKMARKS (PHASES 3–5)
+
+| File | Status | Notes |
+|------|--------|-------|
+| src/dashboard/dashboard-html.ts | ✅ DONE | Added `loadState()` that fetches `/api/v1/tenants/:tenantId/audits/:auditRunId/state` and hydrates agents, findings feed, tasks, budget, token usage, and pending/failed banners before WebSocket events arrive. |
+| src/lib/router.ts | ✅ DONE | Added `handleDashboardStateGet`; added task studio handlers `handleTaskDetailGet`, `handleTaskFixPreview`, `handleTaskRelease`; added repository bookmark handlers `handleRepoList`, `handleRepoCreate`, `handleRepoPatch`, `handleRepoDelete`. |
+| src/index.ts | ✅ DONE | Wired `GET /api/v1/tenants/:tenantId/audits/:auditRunId/state`; wired task detail/fix-preview/release routes; wired repository CRUD routes; added public `GET /task` page route. |
+| src/workers/fix-agent.ts | ✅ DONE | Refactored fix flow into `generateFixForTask()` supporting `dryRun` and `customPrompt`; `applyFixForTask()` now calls the shared generator. |
+| src/dashboard/task-detail-html.ts | ✅ DONE | New task studio page: view findings, plan, custom prompt, diff preview, apply fix, and release lock. |
+| src/dashboard/task-board-html.ts | ✅ DONE | Added Studio and Release buttons; tasks link to `/task`. |
+| src/db/schema.sql | ✅ DONE | Added `repositories` table with tenant isolation and unique URL constraint. |
+| src/db/migrations/v16_repositories.sql | ✅ DONE | Idempotent migration for repository bookmarks. |
+| src/types/index.ts | ✅ DONE | Added `Repository` interface. |
+| src/dashboard/repos-html.ts | ✅ DONE | Now uses the repository bookmarks API; supports add, edit default branch, toggle active, delete, and quick links to audit start. |
+| src/dashboard/*.html.ts | ✅ DONE | Added client-side `decorateNavLinks()` to persist `audit_run_id` and `tenant_id` across page navigation. |
+| scripts/security-audit.ts | ✅ DONE | Whitelisted public `GET /task` route. |
+| test/dashboard-api.test.ts | ✅ DONE | Added test for the dashboard state endpoint. |
+| test/tasks.test.ts | ✅ DONE | Added task detail GET and lock release tests. |
+| test/repositories.test.ts | ✅ DONE | Added tests for repository bookmark CRUD. |
+
+Type check: PASS. Tests: 273/273 PASS.
+
+## SESSION LOG
+
+| Session | Date | What was done | Files changed | Commit |
+|---------|------|---------------|---------------|--------|
+| S59 | 2026-08-20 | GitHub rate limit resilience + web archive fallback | src/lib/github.ts, test/github.test.ts, BUILD_STATE.md | |
+| S60 | 2026-08-20 | Workflow silent failure fix + failed audit surfacing | src/workflows/audit-start-workflow.ts, src/workers/ingestion.ts, src/lib/router.ts, src/dashboard/audit-list-html.ts, test/workflows.test.ts, test/ingestion.test.ts, BUILD_STATE.md | |
+| S61 | 2026-08-20 | LLM provider key fail-fast + cross-provider fallback | src/lib/llm-gateway.ts, src/workers/coordinator.ts, test/llm-gateway.test.ts, test/coordinator.test.ts, BUILD_STATE.md | |
+| S62 | 2026-08-20 | Pipeline cascade failure fix: zero-findings audits complete | src/workers/coordinator.ts, test/coordinator.test.ts, BUILD_STATE.md | |
+| S63 | 2026-08-21 | User & session foundation | src/db/schema.sql, src/db/migrations/v15_users_sessions.sql, src/types/index.ts, src/lib/auth.ts, src/lib/router.ts, src/index.ts, src/dashboard/login-html.ts, scripts/security-audit.ts, test/auth-user.test.ts, BUILD_STATE.md | |
+| S64 | 2026-08-21 | Robust ingestion & audit lifecycle | src/lib/router.ts, src/workflows/audit-start-workflow.ts, src/lib/git-router.ts, src/workers/ingestion.ts, src/dashboard/audit-new-html.ts, scripts/security-audit.ts, test/audit-start.test.ts, BUILD_STATE.md | |
+| S65 | 2026-08-21 | Dashboard hydration, task studio & repo bookmarks | src/dashboard/dashboard-html.ts, src/lib/router.ts, src/index.ts, src/workers/fix-agent.ts, src/dashboard/task-detail-html.ts, src/dashboard/task-board-html.ts, src/dashboard/repos-html.ts, src/db/schema.sql, src/db/migrations/v16_repositories.sql, src/types/index.ts, scripts/security-audit.ts, test/dashboard-api.test.ts, test/tasks.test.ts, test/repositories.test.ts, BUILD_STATE.md | |

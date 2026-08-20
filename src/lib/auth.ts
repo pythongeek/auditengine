@@ -110,8 +110,14 @@ export async function authenticate(request: Request, env: Env): Promise<AuthCont
     throw new Error('Missing Authorization token')
   }
 
-  const { sub, plan } = await verifyToken(token, env.JWT_SECRET)
-  return { tenantId: sub, plan: plan ?? 'free' }
+  // Tenant JWTs are three-segment HS256 tokens. Session tokens are base64url
+  // random strings without dots. Try JWT first, then session token.
+  if (token.split('.').length === 3) {
+    const { sub, plan } = await verifyToken(token, env.JWT_SECRET)
+    return { tenantId: sub, plan: plan ?? 'free' }
+  }
+
+  return verifyUserSession(request, env)
 }
 
 export async function isAdmin(request: Request, env: Env): Promise<boolean> {
@@ -134,6 +140,137 @@ export async function ensureTenant(tenantId: string, db: D1Database): Promise<vo
   await db
     .prepare('INSERT OR IGNORE INTO tenants (id, name, plan) VALUES (?, ?, ?)')
     .bind(tenantId, tenantId, 'free')
+    .run()
+}
+
+const PBKDF2_ITERATIONS = 100_000
+const SESSION_TOKEN_BYTES = 32
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16)) as unknown as ArrayBuffer
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  )
+  const derived = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    key,
+    256
+  )
+  return `${base64urlEncode(new Uint8Array(salt))}:${base64urlEncode(new Uint8Array(derived))}`
+}
+
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const [saltB64, hashB64] = storedHash.split(':')
+  if (!saltB64 || !hashB64) return false
+  let salt: Uint8Array
+  try {
+    salt = base64urlDecode(saltB64)
+  } catch {
+    return false
+  }
+  const saltBuf = salt as unknown as ArrayBuffer
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  )
+  const derived = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: saltBuf, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    key,
+    256
+  )
+  return base64urlEncode(new Uint8Array(derived)) === hashB64
+}
+
+export async function createUserSession(
+  userId: string,
+  tenantId: string,
+  db: D1Database,
+  expiresInSeconds = 7 * 24 * 3600
+): Promise<string> {
+  const tokenBytes = crypto.getRandomValues(new Uint8Array(SESSION_TOKEN_BYTES))
+  const token = base64urlEncode(tokenBytes)
+  const tokenHashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token).buffer as ArrayBuffer)
+  const tokenHash = base64urlEncode(new Uint8Array(tokenHashBuffer))
+  const sessionId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+  const now = Math.floor(Date.now() / 1000)
+  const expiresAt = now + expiresInSeconds
+
+  await db
+    .prepare(`
+      INSERT INTO user_sessions (id, user_id, tenant_id, token_hash, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    .bind(sessionId, userId, tenantId, tokenHash, expiresAt, now)
+    .run()
+
+  return token
+}
+
+export async function verifyUserSession(request: Request, env: Env): Promise<AuthContext> {
+  const url = new URL(request.url)
+  let token: string | null = null
+
+  const authHeader = request.headers.get('Authorization')
+  if (authHeader?.toLowerCase().startsWith('bearer ')) {
+    token = authHeader.slice(7).trim()
+  }
+  if (!token) {
+    token = url.searchParams.get('token')
+  }
+  if (!token) {
+    throw new Error('Missing session token')
+  }
+
+  const tokenHashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token).buffer as ArrayBuffer)
+  const tokenHash = base64urlEncode(new Uint8Array(tokenHashBuffer))
+
+  const row = await env.DB
+    .prepare(`
+      SELECT us.user_id, us.tenant_id, t.plan
+      FROM user_sessions us
+      JOIN tenants t ON t.id = us.tenant_id
+      WHERE us.token_hash = ?
+        AND us.revoked_at IS NULL
+        AND us.expires_at > unixepoch()
+    `)
+    .bind(tokenHash)
+    .first<{ user_id: string; tenant_id: string; plan: string }>()
+
+  if (!row) {
+    throw new Error('Invalid or expired session token')
+  }
+
+  return { tenantId: row.tenant_id, plan: row.plan ?? 'free', userId: row.user_id }
+}
+
+export async function revokeUserSession(request: Request, env: Env): Promise<void> {
+  const url = new URL(request.url)
+  let token: string | null = null
+
+  const authHeader = request.headers.get('Authorization')
+  if (authHeader?.toLowerCase().startsWith('bearer ')) {
+    token = authHeader.slice(7).trim()
+  }
+  if (!token) {
+    token = url.searchParams.get('token')
+  }
+  if (!token) return
+
+  const tokenHashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token).buffer as ArrayBuffer)
+  const tokenHash = base64urlEncode(new Uint8Array(tokenHashBuffer))
+
+  await env.DB
+    .prepare('UPDATE user_sessions SET revoked_at = unixepoch() WHERE token_hash = ? AND revoked_at IS NULL')
+    .bind(tokenHash)
     .run()
 }
 

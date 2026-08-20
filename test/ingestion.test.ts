@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { zip } from 'fflate'
 import ingestionWorker from '../src/workers/ingestion'
 import { detectLanguage } from '../src/lib/lang'
@@ -208,6 +208,31 @@ describe('ingestion worker', () => {
     })
     const response = await ingestionWorker.fetch(request, env)
     expect(response.status).toBe(400)
+  })
+
+  it('marks audit session failed and logs reason when repo download fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('rate limited', { status: 403 })))
+    const env = makeEnv()
+    const body = JSON.stringify({
+      audit_run_id: 'run-fail-001',
+      repo_url: 'https://github.com/acme/widgets',
+      branch: 'main',
+    })
+    const request = new Request('https://example.com/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': 'tenant-1' },
+      body,
+    })
+
+    const response = await ingestionWorker.fetch(request, env)
+    expect(response.status).toBe(500)
+    const json = await response.json() as { error: string }
+    expect(json.error).toMatch(/rate limit/i)
+
+    const { runs } = env.DB as unknown as { runs: { sql: string; params: unknown[] }[] }
+    expect(runs.some(r => r.sql.toLowerCase().includes('update audit_sessions') && r.sql.includes('failed'))).toBe(true)
+    const logRun = runs.find(r => r.sql.toLowerCase().includes('audit_logs') && r.sql.toLowerCase().includes('insert') && r.params.some(p => p === 'ingestion_failed'))
+    expect(logRun).toBeDefined()
   })
 
   it('accepts a zip upload', async () => {

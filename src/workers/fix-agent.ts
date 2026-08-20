@@ -79,18 +79,41 @@ export interface FixResult {
   error?: string
 }
 
+export interface FixPreview {
+  file: string
+  original: string
+  fixed: string
+}
+
+export interface GeneratedFixResult {
+  ok: boolean
+  changes: RepoFileChange[]
+  preview: FixPreview[]
+  error?: string
+}
+
+export interface ApplyFixOptions {
+  dryRun?: boolean
+  customPrompt?: string
+}
+
 /**
- * Generate fixes for a task's findings, commit them to a new branch on the
- * audited repository, open a PR/MR, and hand the task to verification.
+ * Fetch the current source files for a task, ask the fix agent to rewrite them,
+ * and return the proposed changes. Does not commit or create branches when
+ * dryRun is true.
  */
-export async function applyFixForTask(taskId: string, env: Env): Promise<FixResult> {
+export async function generateFixForTask(
+  taskId: string,
+  env: Env,
+  options: ApplyFixOptions = {}
+): Promise<GeneratedFixResult> {
   const db = env.DB
 
   const task = await db
     .prepare('SELECT * FROM tasks WHERE task_id = ?')
     .bind(taskId)
     .first<Task>()
-  if (!task) return { ok: false, error: 'Task not found' }
+  if (!task) return { ok: false, changes: [], preview: [], error: 'Task not found' }
 
   const tenantId = task.tenant_id ?? ''
   const session = await db
@@ -99,16 +122,16 @@ export async function applyFixForTask(taskId: string, env: Env): Promise<FixResu
     .first<{ repo_url: string | null; repo_branch: string | null }>()
 
   if (!session?.repo_url) {
-    return { ok: false, error: 'Fix automation requires an audit started from a repository URL (repo_url missing)' }
+    return { ok: false, changes: [], preview: [], error: 'Fix automation requires an audit started from a repository URL (repo_url missing)' }
   }
   const parsed = parseRepoUrl(session.repo_url, session.repo_branch ?? undefined)
   if (!parsed) {
-    return { ok: false, error: `Unsupported repo_url: ${session.repo_url}` }
+    return { ok: false, changes: [], preview: [], error: `Unsupported repo_url: ${session.repo_url}` }
   }
   const baseBranch = session.repo_branch || parsed.ref || 'main'
 
   const findingIds: string[] = JSON.parse(task.finding_ids || '[]')
-  if (findingIds.length === 0) return { ok: false, error: 'Task has no findings' }
+  if (findingIds.length === 0) return { ok: false, changes: [], preview: [], error: 'Task has no findings' }
 
   const placeholders = findingIds.map(() => '?').join(',')
   const findingRows = await db
@@ -118,29 +141,32 @@ export async function applyFixForTask(taskId: string, env: Env): Promise<FixResu
   const findings = findingRows.results ?? []
 
   const files = [...new Set(findings.map(f => f.file).filter(Boolean))]
-  if (files.length === 0) return { ok: false, error: 'Findings reference no files' }
+  if (files.length === 0) return { ok: false, changes: [], preview: [], error: 'Findings reference no files' }
 
   const broadcast = makeBroadcast(env, task.audit_run_id)
-  const branch = fixBranchName(taskId)
 
   try {
-    await createBranch(session.repo_url, branch, baseBranch, tenantId, env)
-
     const changes: RepoFileChange[] = []
+    const preview: FixPreview[] = []
     for (const filePath of files) {
       const content = await fetchFileContent(
         session.repo_url, parsed.owner, parsed.repo, filePath, baseBranch, tenantId, env
       )
       if (content === null) {
-        return { ok: false, error: `Could not fetch current content of ${filePath} from the repository` }
+        return { ok: false, changes: [], preview: [], error: `Could not fetch current content of ${filePath} from the repository` }
       }
 
       const fileFindings = findings.filter(f => f.file === filePath)
+      const messages = buildFixMessages(filePath, content, fileFindings, task.plan_text)
+      if (options.customPrompt) {
+        messages[messages.length - 1].content += `\n\n## ADDITIONAL INSTRUCTIONS FROM USER\n${options.customPrompt}`
+      }
+
       const response = await llmCall({
         agentId: `fixer-${taskId}`,
         agentType: FIXER_AGENT_TYPE,
         taskType: 'code_fix',
-        messages: buildFixMessages(filePath, content, fileFindings, task.plan_text),
+        messages,
         auditRunId: task.audit_run_id,
         db,
         broadcast,
@@ -149,12 +175,20 @@ export async function applyFixForTask(taskId: string, env: Env): Promise<FixResu
       const fixed = extractFileContent(response.text)
       if (fixed && fixed !== content) {
         changes.push({ path: filePath, content: fixed })
+        preview.push({ file: filePath, original: content, fixed })
       }
     }
 
     if (changes.length === 0) {
-      return { ok: false, error: 'Fix agent produced no changes' }
+      return { ok: false, changes: [], preview: [], error: 'Fix agent produced no changes' }
     }
+
+    if (options.dryRun) {
+      return { ok: true, changes, preview }
+    }
+
+    const branch = fixBranchName(taskId)
+    await createBranch(session.repo_url, branch, baseBranch, tenantId, env)
 
     const commit = await commitFiles(
       session.repo_url,
@@ -197,13 +231,32 @@ export async function applyFixForTask(taskId: string, env: Env): Promise<FixResu
       // verification will be re-run from the task board or the coordinator
     }
 
-    return { ok: true, branch, commit_sha: commit.sha, pr_url: pr.url }
+    return { ok: true, changes, preview, branch, commit_sha: commit.sha, pr_url: pr.url } as unknown as GeneratedFixResult
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Fix failed'
     await db
       .prepare('INSERT INTO agent_errors (tenant_id, audit_run_id, agent_id, error_type, error_msg, file_path) VALUES (?, ?, ?, ?, ?, ?)')
       .bind(tenantId, task.audit_run_id, `fixer-${taskId}`, 'fix_error', message, files[0] ?? '')
       .run()
-    return { ok: false, error: message }
+    return { ok: false, changes: [], preview: [], error: message }
+  }
+}
+
+/**
+ * Generate fixes for a task's findings, commit them to a new branch on the
+ * audited repository, open a PR/MR, and hand the task to verification.
+ */
+export async function applyFixForTask(taskId: string, env: Env): Promise<FixResult> {
+  const result = await generateFixForTask(taskId, env)
+  if (!result.ok) {
+    return { ok: false, error: result.error ?? 'Fix failed' }
+  }
+  // The apply path returned the branch/commit/pr from the full run.
+  const full = result as unknown as GeneratedFixResult & { branch?: string; commit_sha?: string; pr_url?: string }
+  return {
+    ok: true,
+    branch: full.branch,
+    commit_sha: full.commit_sha,
+    pr_url: full.pr_url,
   }
 }

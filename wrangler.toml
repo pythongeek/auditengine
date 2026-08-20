@@ -97,11 +97,11 @@ crons = ["0 * * * *"]
 binding = "WRITE_QUEUE"
 queue = "auditengine-write-queue"
 
-[[queues.consumers]]
-queue = "auditengine-write-queue"
-max_batch_size = 10
-max_batch_timeout = 5
-max_retries = 3
+# [[queues.consumers]]
+# queue = "auditengine-write-queue"
+# max_batch_size = 10
+# max_batch_timeout = 5
+# max_retries = 3
 
 [[workflows]]
 binding = "PRIORITY_RESOLVER_WORKFLOW"

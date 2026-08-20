@@ -236,7 +236,19 @@ export const FINDING_DETAIL_HTML = `<!DOCTYPE html>
       ws.onerror = () => ws.close();
     }
 
+    function decorateNavLinks() {
+      localStorage.setItem('auditengine_audit_run_id', auditRunId);
+      document.querySelectorAll('nav a').forEach(a => {
+        const href = a.getAttribute('href');
+        if (!href || href === '#' || href.startsWith('http')) return;
+        const u = new URL(href, location.origin);
+        u.searchParams.set('audit_run_id', auditRunId);
+        a.href = u.pathname + u.search;
+      });
+    }
+
     loadFindings();
+    decorateNavLinks();
     connect();
   </script>
 </body>

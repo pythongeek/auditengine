@@ -15,6 +15,36 @@ CREATE TABLE IF NOT EXISTS tenants (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Users: per-tenant login accounts
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(12)))),
+  tenant_id     TEXT NOT NULL,
+  email         TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('admin', 'member')),
+  created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_email ON users(tenant_id, email);
+CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
+
+-- User sessions: persistent cookie/session tokens
+CREATE TABLE IF NOT EXISTS user_sessions (
+  id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(12)))),
+  user_id     TEXT NOT NULL,
+  tenant_id   TEXT NOT NULL,
+  token_hash  TEXT NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  revoked_at  INTEGER,
+  created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_tenant ON user_sessions(tenant_id);
+
 -- File ownership claims (atomic — composite PK prevents duplicate analysis per agent per file)
 CREATE TABLE IF NOT EXISTS claims (
   tenant_id    TEXT NOT NULL DEFAULT '',
@@ -305,6 +335,23 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value      TEXT NOT NULL,  -- AES-GCM encrypted
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
+
+-- Repository bookmarks: tenant-managed repos for quick audit starts
+CREATE TABLE IF NOT EXISTS repositories (
+  id              TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(12)))),
+  tenant_id       TEXT NOT NULL,
+  provider        TEXT NOT NULL DEFAULT 'github',
+  owner           TEXT,
+  repo            TEXT,
+  url             TEXT NOT NULL,
+  default_branch  TEXT NOT NULL DEFAULT 'main',
+  is_active       INTEGER NOT NULL DEFAULT 1,
+  created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_repositories_tenant ON repositories(tenant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repositories_tenant_url ON repositories(tenant_id, url);
 
 -- ── TRIGGERS: Budget enforcement ──────────────────────────────────────────
 

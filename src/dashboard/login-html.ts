@@ -65,37 +65,52 @@ export const LOGIN_HTML = `<!DOCTYPE html>
       display: none;
     }
     .error.active { display: block; }
+    .token-mode {
+      margin-top: 1rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: center;
+    }
+    .token-mode a { color: var(--accent); }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>AuditEngine</h1>
-    <p>Enter your tenant JWT token to continue.</p>
-    <p style="font-size: 0.8rem; color: var(--muted);">Admins: create a tenant and get a token from <a href="/settings" style="color: var(--accent);">/settings</a>.</p>
+    <p>Sign in with your tenant email and password.</p>
     <form id="loginForm">
-      <label for="token">JWT Token</label>
-      <input id="token" type="password" autocomplete="off" placeholder="paste token here" required />
-      <button type="submit">Continue</button>
+      <label for="tenantId">Tenant ID</label>
+      <input id="tenantId" type="text" autocomplete="off" placeholder="tenant-abc123" required />
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" required />
+      <button type="submit">Sign In</button>
       <div id="error" class="error"></div>
     </form>
+    <p class="token-mode">Admins: need a tenant token? Use <a href="/settings">/settings</a>.</p>
   </div>
   <script>
     const form = document.getElementById('loginForm');
     const errorEl = document.getElementById('error');
-    const tokenInput = document.getElementById('token');
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errorEl.classList.remove('active');
-      const token = tokenInput.value.trim();
-      if (!token) return;
+      const tenantId = document.getElementById('tenantId').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
 
       try {
-        const res = await fetch('/api/v1/tenant', {
-          headers: { Authorization: 'Bearer ' + token }
+        const res = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tenant_id: tenantId, email, password })
         });
-        if (!res.ok) throw new Error('Invalid token');
-        localStorage.setItem('auditengine_token', token);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Login failed');
+        localStorage.setItem('auditengine_token', data.token);
+        localStorage.setItem('auditengine_tenant', data.tenant.id);
         location.href = '/tenants';
       } catch (err) {
         errorEl.textContent = err.message || 'Login failed';

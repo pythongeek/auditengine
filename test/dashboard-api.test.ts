@@ -221,4 +221,26 @@ describe('dashboard audit API', () => {
     }), env)
     expect(res.status).toBe(404)
   })
+
+  it('returns dashboard state with audit, findings, tasks and budget', async () => {
+    const env = await makeEnv()
+    const token = await getToken(env, 'tenant-1')
+    const res = await worker.fetch(new Request('https://example.com/api/v1/tenants/tenant-1/audits/run-1/state', {
+      headers: { Authorization: 'Bearer ' + token },
+    }), env)
+    expect(res.status).toBe(200)
+    const data = await res.json() as {
+      audit: AuditSession
+      agents: unknown[]
+      findings: Finding[]
+      tasks: unknown[]
+      token_usage: unknown[]
+      budget: { budget_usd: number; spent_usd: number }
+      error_banner: string | null
+    }
+    expect(data.audit.id).toBe('run-1')
+    expect(data.findings).toHaveLength(3)
+    expect(data.budget.budget_usd).toBe(0)
+    expect(data.error_banner).toBeNull()
+  })
 })

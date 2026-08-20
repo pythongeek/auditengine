@@ -312,4 +312,38 @@ describe('task lifecycle REST API', () => {
     const response = await (worker as { fetch: (req: Request, env: Env) => Promise<Response> }).fetch(request, env)
     expect(response.status).toBe(403)
   })
+
+  it('returns task detail with findings', async () => {
+    const { db } = makeMockD1({ tasks: [sampleTask()], findings: [sampleFinding()] })
+    const env = await makeEnv({ DB: db })
+    const request = new Request('https://localhost/api/v1/tenants/tenant-1/audits/run-1/tasks/task-1', {
+      headers: await authHeaders('tenant-1'),
+    })
+
+    const response = await (worker as { fetch: (req: Request, env: Env) => Promise<Response> }).fetch(request, env)
+    const body = await response.json() as { task: Task; findings: Finding[] }
+
+    expect(response.status).toBe(200)
+    expect(body.task.task_id).toBe('task-1')
+    expect(body.findings).toHaveLength(1)
+    expect(body.findings[0].finding_id).toBe('finding-1')
+  })
+
+  it('releases an in_progress task lock', async () => {
+    const { db, runs } = makeMockD1({ tasks: [sampleTask({ status: 'in_progress', assigned_agent: 'human-1', lock_expires_at: 999999 })] })
+    const env = await makeEnv({ DB: db })
+    const request = new Request('https://localhost/api/v1/tenants/tenant-1/audits/run-1/tasks/task-1/release', {
+      method: 'POST',
+      headers: await authHeaders('tenant-1'),
+    })
+
+    const response = await (worker as { fetch: (req: Request, env: Env) => Promise<Response> }).fetch(request, env)
+    const body = await response.json() as { status: string }
+
+    expect(response.status).toBe(200)
+    expect(body.status).toBe('backlog')
+
+    const updateRun = runs.find(r => r.sql.toLowerCase().includes('update tasks') && r.sql.toLowerCase().includes("'backlog'"))
+    expect(updateRun).toBeDefined()
+  })
 })

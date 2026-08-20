@@ -10,7 +10,8 @@ export async function listRepoFiles(
   repoUrl: string,
   branch: string | undefined,
   tenantId: string,
-  env: Env
+  env: Env,
+  tokenOverride?: string
 ): Promise<Array<{ path: string; type: string }>> {
   const provider = getProvider(repoUrl)
   if (!provider) {
@@ -19,15 +20,15 @@ export async function listRepoFiles(
 
   switch (provider) {
     case 'github': {
-      const token = await github.getTokenForTenant(env.DB, tenantId, env)
+      const token = tokenOverride ?? await github.getTokenForTenant(env.DB, tenantId, env)
       return github.listRepoFiles(repoUrl, branch, token)
     }
     case 'gitlab': {
-      const token = await gitlab.getTokenForTenant(env.DB, tenantId, env)
+      const token = tokenOverride ?? await gitlab.getTokenForTenant(env.DB, tenantId, env)
       return gitlab.listRepoFiles(repoUrl, branch, token)
     }
     case 'bitbucket': {
-      const token = await bitbucket.getTokenForTenant(env.DB, tenantId, env)
+      const token = tokenOverride ?? await bitbucket.getTokenForTenant(env.DB, tenantId, env)
       return bitbucket.listRepoFiles(repoUrl, branch, token)
     }
   }
@@ -44,7 +45,8 @@ export async function getRepoFiles(
   repoUrl: string,
   branch: string | undefined,
   tenantId: string,
-  env: Env
+  env: Env,
+  tokenOverride?: string
 ): Promise<RepoFile[]> {
   const provider = getProvider(repoUrl)
   if (!provider) {
@@ -52,15 +54,15 @@ export async function getRepoFiles(
   }
   switch (provider) {
     case 'github': {
-      const token = await github.getTokenForTenant(env.DB, tenantId, env)
+      const token = tokenOverride ?? await github.getTokenForTenant(env.DB, tenantId, env)
       return github.fetchRepoFiles(repoUrl, branch, token)
     }
     case 'gitlab': {
-      const token = await gitlab.getTokenForTenant(env.DB, tenantId, env)
+      const token = tokenOverride ?? await gitlab.getTokenForTenant(env.DB, tenantId, env)
       return gitlab.fetchRepoFiles(repoUrl, branch, token)
     }
     case 'bitbucket': {
-      const token = await bitbucket.getTokenForTenant(env.DB, tenantId, env)
+      const token = tokenOverride ?? await bitbucket.getTokenForTenant(env.DB, tenantId, env)
       return bitbucket.fetchRepoFiles(repoUrl, branch, token)
     }
   }

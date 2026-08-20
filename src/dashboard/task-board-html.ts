@@ -192,9 +192,21 @@ export const TASK_BOARD_HTML = `<!DOCTYPE html>
           '<div class="actions">' +
             '<button class="mini" data-act="plan">' + (task.plan_status === 'ready' ? 'View Plan' : 'AI Plan') + '</button>' +
             '<button class="mini" data-act="fix">Apply Fix → PR</button>' +
+            '<button class="mini" data-act="detail">Studio</button>' +
+            (task.status === 'in_progress' ? '<button class="mini" data-act="release">Release</button>' : '') +
           '</div>';
         el.querySelector('[data-act="plan"]').addEventListener('click', (e) => { e.stopPropagation(); openPlan(task); });
         el.querySelector('[data-act="fix"]').addEventListener('click', (e) => { e.stopPropagation(); applyFix(task.task_id); });
+        el.querySelector('[data-act="detail"]').addEventListener('click', (e) => {
+          e.stopPropagation();
+          const u = new URL('/task', location.origin);
+          u.searchParams.set('tenant_id', tenantId);
+          u.searchParams.set('audit_run_id', auditRunId);
+          u.searchParams.set('task_id', task.task_id);
+          location.href = u.toString();
+        });
+        const releaseBtn = el.querySelector('[data-act="release"]');
+        if (releaseBtn) releaseBtn.addEventListener('click', (e) => { e.stopPropagation(); releaseTask(task.task_id); });
         el.addEventListener('dragstart', () => el.classList.add('dragging'));
         el.addEventListener('dragend', () => el.classList.remove('dragging'));
         col.appendChild(el);
@@ -236,6 +248,21 @@ export const TASK_BOARD_HTML = `<!DOCTYPE html>
         if (!res.ok) throw new Error(data.error || 'Fix failed');
         document.getElementById('error').textContent = '';
         alert('Fix committed. PR: ' + (data.pr_url || data.commit_sha));
+        loadTasks();
+      } catch (err) {
+        document.getElementById('error').textContent = err.message;
+      }
+    }
+
+    async function releaseTask(taskId) {
+      if (!confirm('Release the task lock and return it to the backlog?')) return;
+      try {
+        const res = await fetch(basePath + '/tasks/' + taskId + '/release', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Release failed');
         loadTasks();
       } catch (err) {
         document.getElementById('error').textContent = err.message;
@@ -335,7 +362,19 @@ export const TASK_BOARD_HTML = `<!DOCTYPE html>
       ws.onerror = () => ws.close();
     }
 
+    function decorateNavLinks() {
+      localStorage.setItem('auditengine_audit_run_id', auditRunId);
+      document.querySelectorAll('nav a').forEach(a => {
+        const href = a.getAttribute('href');
+        if (!href || href === '#' || href.startsWith('http')) return;
+        const u = new URL(href, location.origin);
+        u.searchParams.set('audit_run_id', auditRunId);
+        a.href = u.pathname + u.search;
+      });
+    }
+
     loadTasks();
+    decorateNavLinks();
     connect();
   </script>
 </body>
