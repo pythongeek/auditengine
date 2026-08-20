@@ -430,7 +430,7 @@ Tool: Kimi Code
 | Audit start form auth header | ✅ | /audit/new now sends tenant JWT from localStorage to /audit/start |
 | /audit/start repo_url validation | ✅ | Allows repo_url without files array |
 | GitHub User-Agent header | ✅ | Added to all GitHub API calls to satisfy API requirement |
-| wrangler deploy successful | ✅ | Deploy URL: https://auditengine.tsnion.workers.dev (Version ID: a338eced-4f92-44bb-925f-827927b0320c) |
+| wrangler deploy successful | ✅ | Deploy URL: https://auditengine.tsnion.workers.dev (Version ID: 1f57b13f-4644-45a6-a3cf-849b29573e2b) |
 
 ## TESTS
 
